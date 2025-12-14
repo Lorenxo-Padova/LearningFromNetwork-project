@@ -84,7 +84,7 @@ def print_metrics(metrics, fold=None):
     print(f"Accuracy:  {metrics['accuracy']:.4f}")
     print(f"Precision: {metrics['precision']:.4f}")
     print(f"Recall:    {metrics['recall']:.4f}")
-    print(f"F1-Score:  {metrics['f1']:.4f}")
+    print(f"F1-Score:  {metrics['f1']:.4f}\n")
 
 def aggregate_cv_results(all_fold_metrics):
     """
