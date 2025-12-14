@@ -25,11 +25,13 @@ from utils.evaluation import (
 # Import embedding methods
 from embeddings.deepwalk import DeepWalkEmbedder
 from embeddings.node2vec import Node2VecEmbedder
+from embeddings.graphwave.graphwave import GraphWaveEmbedder
 
 # Available embedding methods
 EMBEDDING_METHODS = {
     'deepwalk': DeepWalkEmbedder,
     'node2vec': Node2VecEmbedder,
+    'graphwave': GraphWaveEmbedder,
 }
 
 def parse_arguments():
@@ -206,6 +208,14 @@ def run_pipeline(args):
             q=config.NODE2VEC_Q,
             window_size=config.NODE2VEC_WINDOW_SIZE,
             workers=config.WORKERS_COUNT,
+            random_state=config.RANDOM_STATE
+        )
+    elif args.method == 'graphwave':
+        embedder = GraphWaveEmbedder(
+            embedding_dim=args.embedding_dim,
+            order=config.ORDER if hasattr(config, 'ORDER') else 30,
+            proc=config.PROC if hasattr(config, 'PROC') else 'approximate',
+            nb_filters=config.NB_FILTERS if hasattr(config, 'NB_FILTERS') else 2,
             random_state=config.RANDOM_STATE
         )
     
