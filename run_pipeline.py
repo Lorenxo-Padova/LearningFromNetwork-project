@@ -233,12 +233,13 @@ def run_pipeline(args):
     
     for fold_idx, (train_idx, test_idx) in enumerate(tqdm(folds, desc="Folds")):
         # Prepare fold data
+        print("Preparing fold data...")
         train_edges, test_pos, test_neg, train_graph = prepare_fold_data(
             edges_df, train_idx, test_idx, 
             negative_ratio=config.NEGATIVE_SAMPLING_RATIO,
             random_state=config.RANDOM_STATE + fold_idx
         )
-        
+        print("Runninng link prediction for this fold...")
         # Run prediction for this fold
         fold_metrics, y_true, y_pred_proba = run_single_fold(
             fold_idx, train_edges, test_pos, test_neg, train_graph,
