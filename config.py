@@ -33,6 +33,19 @@ NODE2VEC_P = 1.0  # Return parameter
 NODE2VEC_Q = 1.0  # In-out parameter
 NODE2VEC_WINDOW_SIZE = 10
 
+# Metapath2Vec configuration
+
+METAPATHS = [
+    ["protein", "protein"],
+    ["gene", "disease", "gene"],
+    ["gene", "compound", "disease", "compound", "gene"],
+    ["compound", "gene", "compound"]
+]
+
+METAPATH_WALK_LENGTH = 40
+METAPATH_WALKS_PER_NODE = 10
+METAPATH_WINDOW_SIZE = 5
+
 # ==================== CLASSIFIER CONFIGURATION ====================
 CLASSIFIER_TYPE = 'logistic_regression'  # Options: 'logistic_regression', 'random_forest', 'svm'
 CLASSIFIER_MAX_ITER = 1000

@@ -7,59 +7,57 @@ import numpy as np
 from sklearn.model_selection import KFold
 import random
 
-def load_ppi_data(filepath):
+def load_graph_data(filepath):
     """
-    Load protein-protein interaction data from CSV file.
-    
-    Args:
-        filepath (str): Path to the CSV file
-        
-    Returns:
-        pandas.DataFrame: DataFrame with 'Source' and 'Target' columns
+    Load homogeneous or heterogeneous edge list.
+
+    Required columns:
+      - Source, Target
+    Optional columns:
+      - SourceType, TargetType
     """
-    try:
-        df = pd.read_csv(filepath)
-        
-        # Standardize column names
-        if len(df.columns) == 2:
-            df.columns = ['Source', 'Target']
-        elif 'Source' not in df.columns or 'Target' not in df.columns:
-            raise ValueError("CSV must have 'Source' and 'Target' columns or exactly 2 columns")
-        
-        # Convert to string type
-        df['Source'] = df['Source'].astype(str)
-        df['Target'] = df['Target'].astype(str)
-        
-        # Remove duplicates and self-loops
-        df = df[df['Source'] != df['Target']]
-        df = df.drop_duplicates()
-        
-        return df
-        
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Dataset file not found: {filepath}")
-    except Exception as e:
-        raise Exception(f"Error loading data: {str(e)}")
+    df = pd.read_csv(filepath)
+
+    required = {"Source", "Target"}
+    if not required.issubset(df.columns):
+        raise ValueError("CSV must contain Source and Target columns")
+
+    df["Source"] = df["Source"].astype(str)
+    df["Target"] = df["Target"].astype(str)
+
+    if "SourceType" in df.columns and "TargetType" in df.columns:
+        df["SourceType"] = df["SourceType"].astype(str)
+        df["TargetType"] = df["TargetType"].astype(str)
+        heterogeneous = True
+    else:
+        heterogeneous = False
+
+    df = df[df["Source"] != df["Target"]].drop_duplicates()
+
+    return df, heterogeneous
 
 def create_graph_from_edges(edge_df):
     """
     Create a NetworkX graph from edge DataFrame.
-    
-    Args:
-        edge_df (pandas.DataFrame): DataFrame with 'Source' and 'Target' columns
-        
-    Returns:
-        networkx.Graph: Undirected graph
+    Supports heterogeneous graphs if SourceType/TargetType are present.
     """
-    G = nx.from_pandas_edgelist(edge_df, 'Source', 'Target', create_using=nx.Graph())
-    
-    # Remove self-loops
-    G.remove_edges_from(nx.selfloop_edges(G))
-    
-    # Ensure all node labels are strings
-    G = nx.relabel_nodes(G, {node: str(node) for node in G.nodes()})
-    
+    G = nx.Graph()
+
+    heterogeneous = "SourceType" in edge_df.columns
+
+    for _, row in edge_df.iterrows():
+        u, v = row["Source"], row["Target"]
+        G.add_edge(u, v)
+
+        if heterogeneous:
+            G.nodes[u]["ntype"] = row["SourceType"]
+            G.nodes[v]["ntype"] = row["TargetType"]
+        else:
+            G.nodes[u]["ntype"] = "protein"
+            G.nodes[v]["ntype"] = "protein"
+
     return G
+
 
 def generate_negative_samples(graph, num_samples, random_state=42):
     """
