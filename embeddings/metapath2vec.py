@@ -15,7 +15,7 @@ class MetaPath2VecEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        embedding_dim=128,
+        embedding_dim=32,
         metapaths=None,
         walk_length=40,
         walks_per_node=10,
