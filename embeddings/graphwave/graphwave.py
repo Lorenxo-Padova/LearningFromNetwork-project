@@ -10,11 +10,11 @@ import scipy.sparse as sp
 import networkx as nx
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-
+from numba import njit, prange
+from asyncio import graph
 from embeddings.base_embedder import BaseEmbedder
 from embeddings.graphwave.characteristic_functions import charac_function, charac_function_multiscale
 from embeddings.graphwave.utils.graph_tools import laplacian
-
 
 # Constants
 TAUS = [1, 10, 25, 50]
@@ -44,183 +44,94 @@ def compute_cheb_coeff_basis(scale, order):
     return list(coeffs)
 
 
-def heat_diffusion_ind(graph, taus=TAUS, order=ORDER, proc=PROC, lap=None, eta_min=0.8, eta_max=0.95):
+@njit
+def chebyshev_phi(L_data, L_indices, L_indptr, coeffs, node_idx, n_nodes, order):
     """
-    Memory-efficient heat diffusion for GraphWave.
-    Computes node embeddings without forming full n x n matrices.
+    Compute the Chebyshev approximation for one node using sparse CSR matrix.
+    """
+    T_km2 = np.zeros(n_nodes)
+    T_km2[node_idx] = 1.0
+    T_km1 = np.zeros(n_nodes)
 
-    Args:
-        graph : networkx.Graph
-        taus  : list of scales
-        order : Chebyshev polynomial order
-        proc  : 'exact' or 'approximate'
-        lap   : optional precomputed Laplacian
-        eta_min, eta_max: used if taus='auto' to select scales
+    # Sparse matvec: L_hat @ T_km2
+    for i in range(n_nodes):
+        start, end = L_indptr[i], L_indptr[i + 1]
+        s = 0.0
+        for j in range(start, end):
+            s += L_data[j] * T_km2[L_indices[j]]
+        T_km1[i] = s
 
+    phi_u = coeffs[0] * T_km2 + coeffs[1] * T_km1
+
+    for k in range(2, order + 1):
+        T_k = np.zeros(n_nodes)
+        for i in range(n_nodes):
+            start, end = L_indptr[i], L_indptr[i + 1]
+            s = 0.0
+            for j in range(start, end):
+                s += L_data[j] * T_km1[L_indices[j]]
+            T_k[i] = 2 * s - T_km2[i]
+        phi_u += coeffs[k] * T_k
+        T_km2, T_km1 = T_km1, T_k
+
+    return phi_u
+
+def graphwave_alg_numba(graph, time_pnts, taus='auto', 
+                        verbose=False, approximate_lambda=True,
+                        order=30, nb_filters=2):
+    """
+    Memory-efficient, Numba-accelerated GraphWave.
+    
     Returns:
-        heat_dict: dict of node -> list of wavelet vectors per scale
-        taus: scales used
+        chi: np.ndarray (num_nodes x num_time_points*2*len(taus))
+        taus: list of tau scales used
     """
-
-    # Compute Laplacian if not provided
-    if lap is None:
-        a = nx.adjacency_matrix(graph)
-        lap = laplacian(a)
-
-    n_nodes = lap.shape[0]
-
-    # Exact computation
-    if proc == 'exact':
-        lamb, U = np.linalg.eigh(lap.todense())
-        heat_dict = {}
-        for u_idx, node in enumerate(graph.nodes()):
-            heat_dict[node] = [U[u_idx, :] @ np.diag(np.exp(-tau*lamb)) @ U.T for tau in taus]
-        return heat_dict, taus
-
-    # Approximate computation
-    heat_dict = {node: [] for node in graph.nodes()}
-    L_hat = lap - sp.eye(n_nodes)
-    i = 0
-    # Row-wise Chebyshev recursion per node and per scale
-    for tau in taus:
-        coeffs = compute_cheb_coeff_basis(tau, order)
-        for u_idx, node in enumerate(graph.nodes()):
-            i += 1
-            if i % 1000 == 0:
-                print(f"Processing node {i}/{n_nodes} for tau={tau}")
-            # Initialize T_0 and T_1 for this node
-            T_km2 = np.zeros(n_nodes)
-            T_km2[u_idx] = 1.0          # e_u
-            T_km1 = L_hat @ T_km2       # sparse matvec
-
-            # Initialize node wavelet
-            phi_u = coeffs[0] * T_km2 + coeffs[1] * T_km1
-
-            # Recurrence
-            for k in range(2, order + 1):
-                T_k = 2 * (L_hat @ T_km1) - T_km2
-                phi_u += coeffs[k] * T_k
-
-                # Optional pruning for sparsity
-                T_k[np.abs(T_k) < 1e-12] = 0
-
-                T_km2, T_km1 = T_km1, T_k
-
-            heat_dict[node].append(phi_u)
-
-    return heat_dict, taus
-
-
-
-def graphwave_alg(graph, time_pnts, taus='auto', 
-                verbose=False, approximate_lambda=True,
-                order=ORDER, proc=PROC, nb_filters=NB_FILTERS,
-                **kwargs):
-    ''' wrapper function for computing the structural signatures using GraphWave
-    INPUT
-    --------------------------------------------------------------------------------------
-    graph             :   nx Graph
-    time_pnts         :   time points at which to evaluate the characteristic function
-    taus              :   list of scales that we are interested in. Alternatively,
-                        'auto' for the automatic version of GraphWave
-    verbose           :   the algorithm prints some of the hidden parameters
-                        as it goes along
-    approximate_lambda:   (boolean) should the range oflambda be approximated or
-                        computed?
-    proc              :   which procedure to compute the signatures (approximate == that
-                        is, with Chebychev approx -- or exact)
-    nb_filters        :   nuber of taus that we require if  taus=='auto'
-    OUTPUT
-    --------------------------------------------------------------------------------------
-    chi               :  embedding of the function in Euclidean space
-    heat_print        :  returns the actual embeddings of the nodes
-    taus              :  returns the list of scales used.
-    '''
-
     nodes = list(graph.nodes())
     n_nodes = len(nodes)
 
-    # Compute Laplacian if needed
-    lap = None
-    if taus == 'auto' and approximate_lambda is not True:
-        start = time.time()
-        a = nx.adjacency_matrix(graph)
-        print("Computed adjacency matrix in {:.4f} seconds".format(time.time() - start))
-        start = time.time()
-        lap = laplacian(a)
-        print("Computed laplacian in {:.4f} seconds".format(time.time() - start))
-        try:
-            l1 = np.sort(sc.sparse.linalg.eigsh(lap, 2,  which='SM',return_eigenvectors=False))[1]
-        except:
-            l1 = np.sort(sc.sparse.linalg.eigsh(lap, 5,  which='SM',return_eigenvectors=False))[1]
-    elif taus == 'auto':
-        l1 = 1.0 / n_nodes
-
+    # Automatic tau selection
     if taus == 'auto':
-        smax = -np.log(ETA_MIN) * np.sqrt(0.5 / l1)
-        smin = -np.log(ETA_MAX) * np.sqrt(0.5 / l1)
+        if approximate_lambda:
+            l1 = 1.0 / n_nodes
+        else:
+            lap_mat = laplacian(nx.adjacency_matrix(graph))
+            try:
+                l1 = np.sort(sp.linalg.eigsh(lap_mat, 2, which='SM', return_eigenvectors=False))[1]
+            except:
+                l1 = np.sort(sp.linalg.eigsh(lap_mat, 5, which='SM', return_eigenvectors=False))[1]
+        smax = -np.log(0.80) * np.sqrt(0.5 / l1)
+        smin = -np.log(0.95) * np.sqrt(0.5 / l1)
         taus = np.linspace(smin, smax, nb_filters)
 
     n_taus = len(taus)
     num_time_points = len(time_pnts)
+    chi = np.zeros((n_nodes, num_time_points * 2 * n_taus))
 
-    # Precompute L_hat if approximate
-    if proc == 'approximate':
-        if lap is None:
-            lap = laplacian(nx.adjacency_matrix(graph))
-        L_hat = lap - sp.eye(n_nodes)
+    # Precompute L_hat in CSR
+    lap_mat = laplacian(nx.adjacency_matrix(graph))
+    L_hat = lap_mat - sp.eye(n_nodes)
+    L_hat = L_hat.tocsr()
+    L_data = L_hat.data
+    L_indices = L_hat.indices
+    L_indptr = L_hat.indptr
 
-    # Initialize heat_print_dict to store row-wise wavelets
-    heat_print_dict = {node: [] for node in nodes}
-
-    start_total = time.time()
-    i = 0
+    # Compute embeddings
     for tau_idx, tau in enumerate(taus):
-        start_tau = time.time()
         coeffs = compute_cheb_coeff_basis(tau, order)
+        for u_idx in range(n_nodes):
+            phi_u = chebyshev_phi(L_data, L_indices, L_indptr, coeffs, u_idx, n_nodes, order)
+            idx_start = tau_idx * 2 * num_time_points
+            idx_end = idx_start + 2 * num_time_points
+            chi[u_idx, idx_start:idx_end] = charac_function(phi_u, time_pnts)
+            
+            if verbose and (u_idx + 1) % 1000 == 0:
+                print(f"Processed {u_idx+1}/{n_nodes} nodes for tau {tau:.4f}")
 
-        for u_idx, node in enumerate(nodes):
-            i += 1
-            if i % 1000 == 0:
-                print(f"Processing node {i}/{n_nodes} for tau={tau:.4f}")
-
-            # Row-wise Chebyshev recursion
-            T_km2 = np.zeros(n_nodes)
-            T_km2[u_idx] = 1.0
-            T_km1 = L_hat @ T_km2
-            phi_u = coeffs[0] * T_km2 + coeffs[1] * T_km1
-
-            for k in range(2, order + 1):
-                T_k = 2 * (L_hat @ T_km1) - T_km2
-                phi_u += coeffs[k] * T_k
-                T_k[np.abs(T_k) < 1e-12] = 0
-                T_km2, T_km1 = T_km1, T_k
-
-            heat_print_dict[node].append(phi_u)
-
-        print(f"Finished tau {tau_idx+1}/{n_taus} in {time.time() - start_tau:.4f} seconds")
-
-    print(f"Finished all taus in {time.time() - start_total:.4f} seconds")
-
-   # Restructure heat_print_dict into truly sparse row-by-row matrix
-    start = time.time()
-    heat_print = {}
-    for tau_idx in range(n_taus):
-        # Initialize empty sparse matrix in LIL format for efficient row assignment
-        sparse_matrix = sp.lil_matrix((n_nodes, n_nodes))
-        for row_idx, node in enumerate(nodes):
-            # Assign the row directly
-            sparse_matrix[row_idx, :] = heat_print_dict[node][tau_idx]
-        # Convert to CSR for faster subsequent computations
-        heat_print[tau_idx] = sparse_matrix.tocsr()
-    print("Restructured heat diffusion data (fully sparse) in {:.4f} seconds".format(time.time() - start))
+    if verbose:
+        print("GraphWave embedding completed.")
     
-    # Compute characteristic function
-    start = time.time()
-    chi = charac_function_multiscale(heat_print, time_pnts)
-    print("Computed characteristic function in {:.4f} seconds".format(time.time() - start))
+    return chi, taus
 
-    return chi, heat_print, taus
 
 class GraphWaveEmbedder(BaseEmbedder):
     """
@@ -261,10 +172,8 @@ class GraphWaveEmbedder(BaseEmbedder):
         num_time_points = max(1, self.embedding_dim // (2 * self.nb_filters))
         time_points = np.linspace(-math.pi, math.pi, num_time_points)
         
-        chi, _, _ = graphwave_alg(graph, time_points, taus='auto',
-                                    approximate_lambda=True,
-                                    order=self.order, proc=self.proc,
-                                    nb_filters=self.nb_filters)
+        chi, taus = graphwave_alg_numba(graph, time_points, taus='auto', verbose=True)
+
         print(f"GraphWave: Generated chi with shape {chi.shape}")
         # Standardize features (chi shape: [features, nodes])
         self.scaler = StandardScaler()
