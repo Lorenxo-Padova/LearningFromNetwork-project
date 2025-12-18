@@ -11,7 +11,6 @@ import networkx as nx
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from numba import njit, prange
-from asyncio import graph
 from embeddings.base_embedder import BaseEmbedder
 from embeddings.graphwave.characteristic_functions import charac_function, charac_function_multiscale
 from embeddings.graphwave.utils.graph_tools import laplacian
@@ -44,33 +43,29 @@ def compute_cheb_coeff_basis(scale, order):
     return list(coeffs)
 
 
-@njit
-def chebyshev_phi(L_data, L_indices, L_indptr, coeffs, node_idx, n_nodes, order):
+def chebyshev_phi(L_hat, coeffs, node_idx, order):
     """
-    Compute the Chebyshev approximation for one node using sparse CSR matrix.
+    Compute Chebyshev approximation for one node using CSR matrix dot product.
+    
+    Args:
+        L_hat: CSR Laplacian matrix (n_nodes x n_nodes)
+        coeffs: Chebyshev coefficients (list of length order+1)
+        node_idx: index of the node to compute
+        order: polynomial order
+    
+    Returns:
+        phi_u: np.ndarray of shape (n_nodes,)
     """
+    n_nodes = L_hat.shape[0]
+
     T_km2 = np.zeros(n_nodes)
     T_km2[node_idx] = 1.0
-    T_km1 = np.zeros(n_nodes)
-
-    # Sparse matvec: L_hat @ T_km2
-    for i in range(n_nodes):
-        start, end = L_indptr[i], L_indptr[i + 1]
-        s = 0.0
-        for j in range(start, end):
-            s += L_data[j] * T_km2[L_indices[j]]
-        T_km1[i] = s
+    T_km1 = L_hat.dot(T_km2)
 
     phi_u = coeffs[0] * T_km2 + coeffs[1] * T_km1
 
     for k in range(2, order + 1):
-        T_k = np.zeros(n_nodes)
-        for i in range(n_nodes):
-            start, end = L_indptr[i], L_indptr[i + 1]
-            s = 0.0
-            for j in range(start, end):
-                s += L_data[j] * T_km1[L_indices[j]]
-            T_k[i] = 2 * s - T_km2[i]
+        T_k = 2 * L_hat.dot(T_km1) - T_km2
         phi_u += coeffs[k] * T_k
         T_km2, T_km1 = T_km1, T_k
 
@@ -111,20 +106,23 @@ def graphwave_alg_numba(graph, time_pnts, taus='auto',
     lap_mat = laplacian(nx.adjacency_matrix(graph))
     L_hat = lap_mat - sp.eye(n_nodes)
     L_hat = L_hat.tocsr()
-    L_data = L_hat.data
-    L_indices = L_hat.indices
-    L_indptr = L_hat.indptr
 
     # Compute embeddings
     for tau_idx, tau in enumerate(taus):
         coeffs = compute_cheb_coeff_basis(tau, order)
         for u_idx in range(n_nodes):
-            phi_u = chebyshev_phi(L_data, L_indices, L_indptr, coeffs, u_idx, n_nodes, order)
+
+            phi_u = chebyshev_phi(L_hat, coeffs, u_idx, order)  # shape: (n_nodes,)
+            # Select the single node embedding
+            phi_node = phi_u[u_idx:u_idx+1]  # shape: (1,)
+            # Pass as 2D array to charac_function
+            chi_node = charac_function(time_pnts, phi_node[np.newaxis, :])  # shape: (2*time_points, 1)
             idx_start = tau_idx * 2 * num_time_points
             idx_end = idx_start + 2 * num_time_points
-            chi[u_idx, idx_start:idx_end] = charac_function(phi_u, time_pnts)
+            chi[u_idx, idx_start:idx_end] = chi_node[:, 0]  # assign 1D slice
+
             
-            if verbose and (u_idx + 1) % 1000 == 0:
+            if verbose and (u_idx + 1) % 3000 == 0:
                 print(f"Processed {u_idx+1}/{n_nodes} nodes for tau {tau:.4f}")
 
     if verbose:
@@ -169,7 +167,7 @@ class GraphWaveEmbedder(BaseEmbedder):
         # Calculate time points to match embedding_dim exactly
         # chi dimensions: (time_points × 2 × nb_filters) = embedding_dim
         # Therefore: time_points = embedding_dim / (2 * nb_filters)
-        num_time_points = max(1, self.embedding_dim // (2 * self.nb_filters))
+        num_time_points = max(1, int(np.ceil(self.embedding_dim / (2 * self.nb_filters))))
         time_points = np.linspace(-math.pi, math.pi, num_time_points)
         
         chi, taus = graphwave_alg_numba(graph, time_points, taus='auto', verbose=True)
@@ -177,15 +175,13 @@ class GraphWaveEmbedder(BaseEmbedder):
         print(f"GraphWave: Generated chi with shape {chi.shape}")
         # Standardize features (chi shape: [features, nodes])
         self.scaler = StandardScaler()
-        chi_scaled = self.scaler.fit_transform(chi.T)  # Transpose to [nodes, features]
+        chi_scaled = self.scaler.fit_transform(chi)  # Transpose to [nodes, features]
         
         # Adjust dimensionality if needed
         actual_dim = chi_scaled.shape[1]
         if actual_dim > self.embedding_dim:
-            # Truncate if we have more features than needed
             chi_final = chi_scaled[:, :self.embedding_dim]
         elif actual_dim < self.embedding_dim:
-            # Pad with zeros if we have fewer features
             padding = np.zeros((chi_scaled.shape[0], self.embedding_dim - actual_dim))
             chi_final = np.hstack([chi_scaled, padding])
         else:
