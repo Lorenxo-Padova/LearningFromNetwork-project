@@ -14,7 +14,7 @@ import config
 
 # Import utilities
 from utils.data_loader import (
-    load_ppi_data, create_cv_folds, prepare_fold_data
+    load_graph_data, create_cv_folds, prepare_fold_data
 )
 from utils.evaluation import (
     create_feature_vectors, evaluate_predictions, 
@@ -26,12 +26,14 @@ from utils.evaluation import (
 from embeddings.deepwalk import DeepWalkEmbedder
 from embeddings.node2vec import Node2VecEmbedder
 from embeddings.graphwave.graphwave import GraphWaveEmbedder
+from embeddings.metapath2vec import MetaPath2VecEmbedder
 
 # Available embedding methods
 EMBEDDING_METHODS = {
     'deepwalk': DeepWalkEmbedder,
     'node2vec': Node2VecEmbedder,
     'graphwave': GraphWaveEmbedder,
+    'metapath2vec': MetaPath2VecEmbedder
 }
 
 def parse_arguments():
@@ -181,7 +183,7 @@ def run_pipeline(args):
     
     # Load data
     print(f"\n1. Loading data from {args.data}...")
-    edges_df = load_ppi_data(args.data)
+    edges_df, heterogeneous = load_graph_data(args.data)
     print(f"   Total edges loaded: {len(edges_df)}")
     
     # Create cross-validation folds
@@ -218,6 +220,16 @@ def run_pipeline(args):
             nb_filters=config.NB_FILTERS if hasattr(config, 'NB_FILTERS') else 2,
             random_state=config.RANDOM_STATE
         )
+    elif args.method == 'metapath2vec':
+        embedder = MetaPath2VecEmbedder(
+        embedding_dim=args.embedding_dim,
+        metapaths=config.METAPATHS,
+        walk_length=config.METAPATH_WALK_LENGTH,
+        walks_per_node=config.METAPATH_WALKS_PER_NODE,
+        window_size=config.METAPATH_WINDOW_SIZE,
+        workers=config.WORKERS_COUNT,
+        random_state=config.RANDOM_STATE
+    )
     
     print(f"   Embedder: {embedder}")
     
