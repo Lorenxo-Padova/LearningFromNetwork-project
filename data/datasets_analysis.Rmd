@@ -4,7 +4,7 @@ subtitle: "Learning from Networks - project"
 author: "Matteo Meneghin"
 date: "`r Sys.Date()`"
 output: 
-  pdf_document: 
+  bookdown::pdf_document2: 
     toc: true
     fig_height: 6
     number_sections: true
@@ -299,13 +299,13 @@ CTD_all_disease <- c(
   as.character(CTD_GD_cur[[4]]), 
   as.character(CTD_GD[[4]])
 )
-CTD_all_disease <- CTD_all_disease[!is.na(all_terms)]
+CTD_all_disease <- CTD_all_disease[!is.na(CTD_all_disease)]
 
-CTD_mesh_disease <- all_terms[grep("^MESH:", CTD_all_disease)]
+CTD_mesh_disease <- CTD_all_disease[grep("^MESH:", CTD_all_disease)]
 CTD_mesh_disease <- length(unique(CTD_mesh_disease))
 print(paste("Total unique MESH:", CTD_mesh_disease))
 
-CTD_omim <- all_terms[grep("^OMIM:", CTD_all_disease)]
+CTD_omim <- CTD_all_disease[grep("^OMIM:", CTD_all_disease)]
 CTD_omim <- length(unique(CTD_omim))
 print(paste("Total unique OMIM:", CTD_omim))
 ```
@@ -322,7 +322,7 @@ knitr::include_graphics("images/number_nodes_table.png")
 
 The number of edges can be seen in Figure @ref(fig:edge-table).
 
-```{r, edge-table, echo=FALSE, out.width="70%", fig.align="center", fig.cap="Number of nodes by type and identifier"}
+```{r, edge-table, echo=FALSE, out.width="70%", fig.align="center", fig.cap="Number of edges"}
 knitr::include_graphics("images/number_edges_table.png")
 ```
 
@@ -475,7 +475,11 @@ Here an example. Request:
 This is the (partial) response:
 
 ```{xml}
-<PC-Compounds xmlns="http://www.ncbi.nlm.nih.gov" xmlns:xs="http://www.w3.org/2001/XMLSchema-instance" xs:schemaLocation="http://www.ncbi.nlm.nih.gov ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem.xsd">
+<PC-Compounds xmlns="http://www.ncbi.nlm.nih.gov" 
+ xmlns:xs="http://www.w3.org/2001/XMLSchema-instance" 
+ xs:schemaLocation="http://www.ncbi.nlm.nih.gov 
+ ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem.xsd"
+>
   <PC-Compound>
     <PC-Compound_id>
       <PC-CompoundType>
