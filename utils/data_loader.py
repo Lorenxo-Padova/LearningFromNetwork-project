@@ -131,8 +131,10 @@ def prepare_fold_data(edges_df, train_idx, test_idx, negative_ratio=1.0, random_
     test_edges = edges_df.iloc[test_idx].copy()
     
     # Create training graph
+    print("Creating training graph...")
     train_graph = create_graph_from_edges(train_edges)
     
+    print("Generating negative samples for testing...")
     # Generate negative samples for testing
     num_negative = int(len(test_edges) * negative_ratio)
     test_negative = generate_negative_samples(train_graph, num_negative, random_state)

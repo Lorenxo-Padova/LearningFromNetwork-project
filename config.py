@@ -15,7 +15,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # ==================== CROSS-VALIDATION CONFIGURATION ====================
-N_FOLDS = 5  # Number of folds for cross-validation
+N_FOLDS = 4  # Number of folds for cross-validation
 RANDOM_STATE = 42
 NEGATIVE_SAMPLING_RATIO = 1.0  # Ratio of negative samples to positive samples
 

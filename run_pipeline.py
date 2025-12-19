@@ -25,11 +25,13 @@ from utils.evaluation import (
 # Import embedding methods
 from embeddings.deepwalk import DeepWalkEmbedder
 from embeddings.node2vec import Node2VecEmbedder
+from embeddings.graphwave.graphwave import GraphWaveEmbedder
 
 # Available embedding methods
 EMBEDDING_METHODS = {
     'deepwalk': DeepWalkEmbedder,
     'node2vec': Node2VecEmbedder,
+    'graphwave': GraphWaveEmbedder,
 }
 
 def parse_arguments():
@@ -208,6 +210,14 @@ def run_pipeline(args):
             workers=config.WORKERS_COUNT,
             random_state=config.RANDOM_STATE
         )
+    elif args.method == 'graphwave':
+        embedder = GraphWaveEmbedder(
+            embedding_dim=args.embedding_dim,
+            order=config.ORDER if hasattr(config, 'ORDER') else 30,
+            proc=config.PROC if hasattr(config, 'PROC') else 'approximate',
+            nb_filters=config.NB_FILTERS if hasattr(config, 'NB_FILTERS') else 2,
+            random_state=config.RANDOM_STATE
+        )
     
     print(f"   Embedder: {embedder}")
     
@@ -223,12 +233,13 @@ def run_pipeline(args):
     
     for fold_idx, (train_idx, test_idx) in enumerate(tqdm(folds, desc="Folds")):
         # Prepare fold data
+        print("Preparing fold data...")
         train_edges, test_pos, test_neg, train_graph = prepare_fold_data(
             edges_df, train_idx, test_idx, 
             negative_ratio=config.NEGATIVE_SAMPLING_RATIO,
             random_state=config.RANDOM_STATE + fold_idx
         )
-        
+        print("Runninng link prediction for this fold...")
         # Run prediction for this fold
         fold_metrics, y_true, y_pred_proba = run_single_fold(
             fold_idx, train_edges, test_pos, test_neg, train_graph,
