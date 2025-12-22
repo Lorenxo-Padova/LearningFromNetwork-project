@@ -15,7 +15,7 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
 ```
 
 # Setup and datasets download
@@ -24,7 +24,8 @@ Due to the GitHub constraints about file size for some datasets, before you need
 to download all the datasets.
 
 You can download the `vitagrapgh.tsv` file at
-<https://www.kaggle.com/datasets/gianlucadecarlods/vitagraph/>.
+<https://www.kaggle.com/datasets/gianlucadecarlods/vitagraph/>, 
+and save it inside the directory `vitagraph`.
 
 Download and save, inside a new directory called `CTD datasets`, these files:
 
