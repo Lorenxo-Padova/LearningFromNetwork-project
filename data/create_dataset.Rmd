@@ -1,0 +1,62 @@
+---
+title: "Create the dataset"
+subtitle: "Learning from Networks - project"
+author: "Matteo Meneghin"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    toc: true
+    fig_height: 6
+    number_sections: true
+editor_options: 
+  markdown: 
+    wrap: 80
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+## Take a subset from Vitagraph
+
+Vitagraph is already an unique file. We need only to extract the nodes (and so
+the edges) of our interest.
+
+```{r load-vitagraph}
+vitaGRAPH <- read.table("vitagraph/vitagraph.tsv", header = TRUE)
+head(vitaGRAPH)
+```
+
+The nodes (that don't need some transformation) of our interest are:
+
+```{r init-vitagraph-label}
+valid_nodes_vitagraph <- c("Gene::NCBI","Compound::PubChem_Compounds",
+                           "Disease::MESH")
+```
+
+``` {r create-vitagraph-small}
+# Create a search pattern from the valid_nodes_vitagraph vector
+pattern <- paste(valid_nodes_vitagraph, collapse = "|")
+
+# Filter the data frame: 
+# check if the pattern exists in both the 'head' AND the 'tail' columns
+clean_vitagraph_small <- vitaGRAPH[
+  grepl(pattern, vitaGRAPH$head) & grepl(pattern, vitaGRAPH$tail), 
+  c("head", "tail")
+]
+
+head(clean_vitagraph_small)
+
+# Save the results to .tsv file 
+write.table(clean_vitagraph_small, 
+            file = "clean_vitagraph_small.tsv", 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+
+# Save the results to .csv file 
+write.csv(clean_vitagraph_small, 
+          file = "clean_vitagraph_small.csv", 
+          row.names = FALSE)
+```
