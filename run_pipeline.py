@@ -27,13 +27,17 @@ from embeddings.deepwalk import DeepWalkEmbedder
 from embeddings.node2vec import Node2VecEmbedder
 from embeddings.graphwave.graphwave import GraphWaveEmbedder
 from embeddings.metapath2vec import MetaPath2VecEmbedder
+from embeddings.GATher import GATherEmbedder
+from embeddings.graphSAGE import GraphSAGEEmbedder
 
 # Available embedding methods
 EMBEDDING_METHODS = {
     'deepwalk': DeepWalkEmbedder,
     'node2vec': Node2VecEmbedder,
     'graphwave': GraphWaveEmbedder,
-    'metapath2vec': MetaPath2VecEmbedder
+    'metapath2vec': MetaPath2VecEmbedder,
+    'gather': GATherEmbedder,
+    'graphsage': GraphSAGEEmbedder
 }
 
 def parse_arguments():
@@ -230,6 +234,28 @@ def run_pipeline(args):
         workers=config.WORKERS_COUNT,
         random_state=config.RANDOM_STATE
     )
+    elif args.method == 'gather':
+        embedder = GATherEmbedder(
+            embedding_dim=args.embedding_dim,
+            hidden_dim=config.GNN_HIDDEN_DIM if hasattr(config, 'GNN_HIDDEN_DIM') else 64,
+            heads=config.GAT_HEADS if hasattr(config, 'GAT_HEADS') else 4,
+            epochs=config.GNN_EPOCHS if hasattr(config, 'GNN_EPOCHS') else 200,
+            lr=config.GNN_LEARNING_RATE if hasattr(config, 'GNN_LEARNING_RATE') else 0.005,
+            weight_decay=config.GNN_WEIGHT_DECAY if hasattr(config, 'GNN_WEIGHT_DECAY') else 5e-4,
+            dropout=config.GNN_DROPOUT if hasattr(config, 'GNN_DROPOUT') else 0.6,
+            random_state=config.RANDOM_STATE
+        )
+    elif args.method == 'graphsage':
+        embedder = GraphSAGEEmbedder(
+            embedding_dim=args.embedding_dim,
+            hidden_dim=config.GNN_HIDDEN_DIM if hasattr(config, 'GNN_HIDDEN_DIM') else 64,
+            num_layers=config.GRAPHSAGE_LAYERS if hasattr(config, 'GRAPHSAGE_LAYERS') else 2,
+            epochs=config.GNN_EPOCHS if hasattr(config, 'GNN_EPOCHS') else 200,
+            lr=config.GNN_LEARNING_RATE if hasattr(config, 'GNN_LEARNING_RATE') else 0.01,
+            weight_decay=config.GNN_WEIGHT_DECAY if hasattr(config, 'GNN_WEIGHT_DECAY') else 5e-4,
+            dropout=config.GNN_DROPOUT if hasattr(config, 'GNN_DROPOUT') else 0.5,
+            random_state=config.RANDOM_STATE
+        )
     
     print(f"   Embedder: {embedder}")
     

@@ -46,6 +46,19 @@ METAPATH_WALK_LENGTH = 40
 METAPATH_WALKS_PER_NODE = 10
 METAPATH_WINDOW_SIZE = 5
 
+# GNN-based methods (GATher, GraphSAGE) configuration
+GNN_HIDDEN_DIM = 64
+GNN_EPOCHS = 200
+GNN_LEARNING_RATE = 0.01
+GNN_WEIGHT_DECAY = 5e-4
+GNN_DROPOUT = 0.5
+
+# GAT specific
+GAT_HEADS = 4
+
+# GraphSAGE specific
+GRAPHSAGE_LAYERS = 2
+
 # ==================== CLASSIFIER CONFIGURATION ====================
 CLASSIFIER_TYPE = 'logistic_regression'  # Options: 'logistic_regression', 'random_forest', 'svm'
 CLASSIFIER_MAX_ITER = 1000
