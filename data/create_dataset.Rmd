@@ -427,33 +427,33 @@ head(vitaGRAPH)
 The nodes (that don't need some transformation) of our interest are:
 
 ```{r init-vitagraph-label}
-valid_nodes_vitagraph <- c("Gene::NCBI","Compound::PubChem_Compounds",
+valid_nodes_label_vitagraph <- c("Gene::NCBI","Compound::PubChem_Compounds",
                            "Disease::MESH")
 ```
 
-```{r create-vitagraph-small}
-# Create a search pattern from the valid_nodes_vitagraph vector
-pattern <- paste(valid_nodes_vitagraph, collapse = "|")
+```{r vitagraph-already-final}
+# Create a search pattern from the valid_nodes_label_vitagraph vector
+pattern <- paste(valid_nodes_label_vitagraph, collapse = "|")
 
 # Filter the data frame: 
 # check if the pattern exists in both the 'head' AND the 'tail' columns
-clean_vitagraph_small <- vitaGRAPH[
+vitagraph_already_final <- vitaGRAPH[
   grepl(pattern, vitaGRAPH$head) & grepl(pattern, vitaGRAPH$tail), 
   c("head", "tail")
 ]
 
-head(clean_vitagraph_small)
+head(vitagraph_already_final)
 
 # Save the results to .tsv file 
-write.table(clean_vitagraph_small, 
-            file = "clean_vitagraph_small.tsv", 
+write.table(vitagraph_already_final, 
+            file = "vitagraph_already_final.tsv", 
             sep = "\t", 
             row.names = FALSE, 
             quote = FALSE)
 
 # Save the results to .csv file 
-write.csv(clean_vitagraph_small, 
-          file = "clean_vitagraph_small.csv", 
+write.csv(vitagraph_already_final, 
+          file = "vitagraph_already_final.csv", 
           row.names = FALSE)
 ```
 
@@ -463,5 +463,58 @@ Now we need to consider two other types of nodes that needs to be map:
 Disease::DOID and Disease::OMIM.
 
 ```{r vitagraph-to-mesh}
+# Create clean, direct mapping vectors
+# Using setNames avoids creating large intermediate data frames
+doid_lookup <- with(from_DOID_OMIM_to_MESH, 
+                    setNames(paste0("Disease::MESH:", MESH), 
+                             paste0("Disease::DOID:", DOID)))
+omim_lookup <- with(from_DOID_OMIM_to_MESH, 
+                    setNames(paste0("Disease::MESH:", MESH), 
+                             paste0("Disease::OMIM:", OMIM)))
+
+# Combine them into one master lookup
+# Filter out NAs to keep the vector lean
+master_lookup <- c(doid_lookup, omim_lookup)
+master_lookup <- master_lookup[!is.na(names(master_lookup))]
+
+# Extract and mutate ONLY the affected rows
+# We use %in% to find rows where head OR tail matches a DOID/OMIM entry
+vitagraph_doid_omim_to_mesh <- vitaGRAPH[
+  vitaGRAPH$head %in% names(master_lookup) | 
+    vitaGRAPH$tail %in% names(master_lookup), 
+]
+
+# Perform the substitution
+# If the value is in our lookup, replace it; otherwise, keep it as is
+vitagraph_doid_omim_to_mesh$head <- ifelse(
+  vitagraph_doid_omim_to_mesh$head %in% names(master_lookup),
+  master_lookup[vitagraph_doid_omim_to_mesh$head],
+  vitagraph_doid_omim_to_mesh$head
+)
+vitagraph_doid_omim_to_mesh$tail <- ifelse(
+  vitagraph_doid_omim_to_mesh$tail %in% names(master_lookup),
+  master_lookup[vitagraph_doid_omim_to_mesh$tail],
+  vitagraph_doid_omim_to_mesh$tail
+)
+
+# Remove duplicates
+vitagraph_doid_omim_to_mesh <- unique(vitagraph_doid_omim_to_mesh)
+
+vitagraph_doid_omim_to_mesh <- vitagraph_doid_omim_to_mesh[,c("head", "tail")]
+row.names(vitagraph_doid_omim_to_mesh) <- NULL
+head(vitagraph_doid_omim_to_mesh)
+```
+
+Now we can merge the 2 `data.frame`: `vitagraph_already_final` and `vitagraph_doid_omim_to_mesh`
+
+```{r vitagraph-clean}
+vitagraph_clean <- rbind(vitagraph_already_final,vitagraph_doid_omim_to_mesh)
+vitagraph_clean <- unique(vitagraph_clean)
+
+# Save the results to .csv file 
+write.csv(vitagraph_already_final, 
+          file = "vitagraph_clean.csv", 
+          row.names = FALSE)
+```
 
 ```
