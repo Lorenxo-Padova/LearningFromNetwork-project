@@ -10,7 +10,6 @@ import scipy.sparse as sp
 import networkx as nx
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from numba import njit, prange
 from embeddings.base_embedder import BaseEmbedder
 from embeddings.graphwave.characteristic_functions import charac_function, charac_function_multiscale
 from embeddings.graphwave.utils.graph_tools import laplacian
@@ -71,11 +70,11 @@ def chebyshev_phi(L_hat, coeffs, node_idx, order):
 
     return phi_u
 
-def graphwave_alg_numba(graph, time_pnts, taus='auto', 
+def graphwave_alg(graph, time_pnts, taus='auto', 
                         verbose=False, approximate_lambda=True,
                         order=30, nb_filters=2):
     """
-    Memory-efficient, Numba-accelerated GraphWave.
+    Memory-efficient GraphWave.
     
     Returns:
         chi: np.ndarray (num_nodes x num_time_points*2*len(taus))
@@ -170,7 +169,7 @@ class GraphWaveEmbedder(BaseEmbedder):
         num_time_points = max(1, int(np.ceil(self.embedding_dim / (2 * self.nb_filters))))
         time_points = np.linspace(-math.pi, math.pi, num_time_points)
         
-        chi, taus = graphwave_alg_numba(graph, time_points, taus='auto', verbose=True)
+        chi, taus = graphwave_alg(graph, time_points, taus='auto', verbose=True)
 
         print(f"GraphWave: Generated chi with shape {chi.shape}")
         # Standardize features (chi shape: [features, nodes])
