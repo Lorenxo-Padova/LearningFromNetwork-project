@@ -141,7 +141,7 @@ class GATherEmbedder(BaseEmbedder):
             dropout=self.dropout
         ).to(self.device)
         
-        # Train model (unsupervised - we just want good representations)
+
         model.train()
         optimizer = torch.optim.Adam(
             model.parameters(), 
