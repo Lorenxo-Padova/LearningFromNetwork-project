@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import SAGEConv
 from torch_geometric.utils import from_networkx
+from networkx.algorithms import centrality
 from sklearn.preprocessing import StandardScaler
 from embeddings.base_embedder import BaseEmbedder
 
@@ -94,20 +95,33 @@ class GraphSAGEEmbedder(BaseEmbedder):
         # Convert to PyTorch Geometric format
         data = from_networkx(graph)
         
-        # Create node features if they don't exist
-        if not hasattr(data, 'x') or data.x is None:
-            # Use degree and one-hot encoding as initial features
-            num_nodes = data.num_nodes
-            degrees = torch.zeros(num_nodes, 1)
-            for i, node in enumerate(graph.nodes()):
-                degrees[i] = graph.degree(node)
-            
-            # Normalize degrees
-            max_degree = degrees.max()
-            if max_degree > 0:
-                degrees = degrees / max_degree
-            
-            data.x = degrees
+        # Always compute and add centrality measures as features
+        num_nodes = data.num_nodes
+        
+        # Compute centrality measures
+        degree_dict = {node: graph.degree(node) for node in graph.nodes()}
+        betweenness_dict = centrality.betweenness_centrality(graph)
+        closeness_dict = centrality.closeness_centrality(graph)
+        
+        # Create centrality feature matrix
+        centrality_features = torch.zeros(num_nodes, 3)
+        nodes_list = list(graph.nodes())
+        for i, node in enumerate(nodes_list):
+            centrality_features[i, 0] = degree_dict[node]
+            centrality_features[i, 1] = betweenness_dict[node]
+            centrality_features[i, 2] = closeness_dict[node]
+        
+        # Normalize each centrality feature independently
+        for j in range(3):
+            max_val = centrality_features[:, j].max()
+            if max_val > 0:
+                centrality_features[:, j] = centrality_features[:, j] / max_val
+        
+        # Combine with existing features or use centrality features alone
+        if hasattr(data, 'x') and data.x is not None:
+            data.x = torch.cat([data.x, centrality_features], dim=1)
+        else:
+            data.x = centrality_features
         
         # Preprocess features with StandardScaler
         if data.x is not None and data.x.numel() > 0:
