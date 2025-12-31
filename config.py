@@ -5,13 +5,11 @@ import os
 
 # ==================== PATH CONFIGURATION ====================
 DATA_DIR = 'data'
-MODELS_DIR = 'models'
 RESULTS_DIR = 'results'
 PPI_DATASET = os.path.join(DATA_DIR, 'PP-Pathways_ppi.csv')
 
 # Create directories if they don't exist
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # ==================== CROSS-VALIDATION CONFIGURATION ====================
