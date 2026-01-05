@@ -51,6 +51,7 @@ class DeepWalkEmbedder(BaseEmbedder):
                 
                 for _ in range(self.walk_length - 1):
                     neighbors = list(graph.neighbors(current_node))
+                    # If starting node is isolated
                     if not neighbors:
                         break
                     
