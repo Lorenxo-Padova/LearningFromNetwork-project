@@ -23,14 +23,12 @@ def load_graph_data(filepath):
     with open(filepath, 'r') as f:
         first_line = f.readline().strip().lower()
     
-    #TODO: CHANGE THE FIRST LINE OF THE CSV FILE TO CHECK EVERY TIME
-    # heterogeneous_flag = 'heterogeneous' in first_line
-    heterogeneous_flag = True
-
-    with open(filepath, "rb") as f:
-        print(f.readline())
-        print(f.readline())
-    df = pd.read_csv(filepath,sep=",", engine="python")
+    heterogeneous_flag = 'heterogeneous' in first_line
+    
+    # Skip the indicator line if it exists (not a standard CSV header)
+    skiprows = 1 if first_line.startswith('#') else 0
+    
+    df = pd.read_csv(filepath, sep=",", skiprows=skiprows, engine="python")
 
     required = {"Source", "Target"}
     if not required.issubset(df.columns):
