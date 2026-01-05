@@ -99,11 +99,20 @@ def parse_arguments():
     
     return parser.parse_args()
 
-def run_single_fold(fold_idx, train_edges, test_pos_edges, test_neg_edges, 
-                   train_graph, embedder, binary_operator, verbose=True):
+def run_single_fold(
+    fold_idx,
+    train_pos_edges,
+    train_neg_edges,
+    test_pos_edges,
+    test_neg_edges,
+    train_graph,
+    embedder,
+    binary_operator,
+    verbose=True
+):
     """
     Run link prediction for a single fold.
-    
+        
     Args:
         fold_idx (int): Fold index
         train_edges (DataFrame): Training edges
@@ -117,60 +126,127 @@ def run_single_fold(fold_idx, train_edges, test_pos_edges, test_neg_edges,
     Returns:
         tuple: (metrics, y_true, y_pred_proba)
     """
+
     if verbose:
         print(f"\n--- Fold {fold_idx + 1} ---")
-        print(f"Training edges: {len(train_edges)}")
+        print(f"Train positive edges: {len(train_pos_edges)}")
+        print(f"Train negative edges: {len(train_neg_edges)}")
         print(f"Test positive edges: {len(test_pos_edges)}")
         print(f"Test negative edges: {len(test_neg_edges)}")
-    
-    # Generate embeddings on training graph
+
+    # ------------------------------------------------------------------
+    # 1. Generate embeddings on TRAIN graph
+    # ------------------------------------------------------------------
     if verbose:
         print("Generating embeddings...")
     embeddings = embedder.generate_embeddings(train_graph)
-    
-    # Prepare test data
-    test_pos_edges['Label'] = 1
-    test_neg_edges['Label'] = 0
-    test_data = pd.concat([test_pos_edges, test_neg_edges], ignore_index=True)
-    test_data = test_data.sample(frac=1, random_state=config.RANDOM_STATE).reset_index(drop=True)
-    
-    # Create feature vectors
+
+    # Debug coverage: how many train nodes got embeddings
     if verbose:
-        print("Creating feature vectors...")
-    X_test, valid_indices = create_feature_vectors(test_data, embeddings, binary_operator)
-    y_test = test_data.loc[valid_indices, 'Label'].values
+        pos_nodes = set(train_pos_edges["Source"]).union(train_pos_edges["Target"])
+        neg_nodes = set(train_neg_edges["Source"]).union(train_neg_edges["Target"])
+        missing_pos = [n for n in pos_nodes if n not in embeddings]
+        missing_neg = [n for n in neg_nodes if n not in embeddings]
+        print(
+            f"Embedding coverage - pos: {len(pos_nodes) - len(missing_pos)}/{len(pos_nodes)}, "
+            f"neg: {len(neg_nodes) - len(missing_neg)}/{len(neg_nodes)}"
+        )
+        if missing_pos:
+            sample = missing_pos[:5]
+            types = [train_graph.nodes[n].get("type", "?") for n in sample]
+            print("First missing pos nodes (type):", list(zip(sample, types)))
+
+    # ------------------------------------------------------------------
+    # 2. Prepare TRAIN data (for classifier)
+    # ------------------------------------------------------------------
+    train_pos_edges = train_pos_edges.copy()
+    train_neg_edges = train_neg_edges.copy()
+
+    train_pos_edges["Label"] = 1
+    train_neg_edges["Label"] = 0
+
+    train_data = pd.concat(
+        [train_pos_edges, train_neg_edges],
+        ignore_index=True
+    ).sample(frac=1, random_state=config.RANDOM_STATE).reset_index(drop=True)
+
+    if verbose:
+        print("Creating TRAIN feature vectors...")
     
-    if len(X_test) == 0:
-        raise ValueError("No valid feature vectors created. Check if nodes in test set have embeddings.")
+    # Build features separately to guarantee both classes are kept
+    X_train_pos, idx_pos = create_feature_vectors(train_pos_edges, embeddings, binary_operator)
+    X_train_neg, idx_neg = create_feature_vectors(train_neg_edges, embeddings, binary_operator)
     
-    # Split test data for training classifier
-    split_point = len(X_test) // 2
-    X_train_clf = X_test[:split_point]
-    y_train_clf = y_test[:split_point]
-    X_test_clf = X_test[split_point:]
-    y_test_clf = y_test[split_point:]
-    
-    # Train classifier
+    if len(X_train_pos) == 0 or len(X_train_neg) == 0:
+        raise ValueError(
+            f"Fold {fold_idx}: could not create feature vectors for both classes "
+            f"(pos={len(X_train_pos)}, neg={len(X_train_neg)}). Check embeddings coverage."
+        )
+
+
+    y_train_pos = np.ones(len(X_train_pos))
+    y_train_neg = np.zeros(len(X_train_neg))
+
+    X_train = np.vstack([X_train_pos, X_train_neg])
+    y_train = np.concatenate([y_train_pos, y_train_neg])
+
+    # Shuffle to mix classes
+    rng = np.random.default_rng(config.RANDOM_STATE)
+    perm = rng.permutation(len(y_train))
+    X_train = X_train[perm]
+    y_train = y_train[perm]
+
+    # ------------------------------------------------------------------
+    # 3. Prepare TEST data (for evaluation only)
+    # ------------------------------------------------------------------
+    test_pos_edges = test_pos_edges.copy()
+    test_neg_edges = test_neg_edges.copy()
+
+    test_pos_edges["Label"] = 1
+    test_neg_edges["Label"] = 0
+
+    test_data = pd.concat(
+        [test_pos_edges, test_neg_edges],
+        ignore_index=True
+    ).sample(frac=1, random_state=config.RANDOM_STATE).reset_index(drop=True)
+
+    if verbose:
+        print("Creating TEST feature vectors...")
+    X_test, test_idx = create_feature_vectors(
+        test_data, embeddings, binary_operator
+    )
+    y_test = test_data.loc[test_idx, "Label"].values
+
+    if len(np.unique(y_test)) < 2:
+        raise ValueError(
+            f"Fold {fold_idx}: test data has only one class after feature creation. "
+            "Check sampling ratios and embedding coverage."
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Train classifier
+    # ------------------------------------------------------------------
     if verbose:
         print("Training classifier...")
     classifier = LogisticRegression(
         random_state=config.RANDOM_STATE,
-        solver='lbfgs',
+        solver="lbfgs",
         max_iter=config.CLASSIFIER_MAX_ITER
     )
-    classifier.fit(X_train_clf, y_train_clf)
-    
-    # Make predictions
-    y_pred_proba = classifier.predict_proba(X_test_clf)[:, 1]
-    y_pred = classifier.predict(X_test_clf)
-    
-    # Evaluate
-    metrics = evaluate_predictions(y_test_clf, y_pred, y_pred_proba)
-    
+    classifier.fit(X_train, y_train)
+
+    # ------------------------------------------------------------------
+    # 5. Predict & evaluate
+    # ------------------------------------------------------------------
+    y_pred_proba = classifier.predict_proba(X_test)[:, 1]
+    y_pred = classifier.predict(X_test)
+
+    metrics = evaluate_predictions(y_test, y_pred, y_pred_proba)
+
     if verbose:
         print_metrics(metrics, fold=fold_idx)
-    
-    return metrics, y_test_clf, y_pred_proba
+
+    return metrics, y_test, y_pred_proba
 
 def run_pipeline(args):
     """
@@ -272,15 +348,16 @@ def run_pipeline(args):
     for fold_idx, (train_idx, test_idx) in enumerate(tqdm(folds, desc="Folds")):
         # Prepare fold data
         print("Preparing fold data...")
-        train_edges, test_pos, test_neg, train_graph = prepare_fold_data(
+        train_pos, train_neg, test_pos, test_neg, train_graph = prepare_fold_data(
             edges_df, train_idx, test_idx, 
             negative_ratio=config.NEGATIVE_SAMPLING_RATIO,
             random_state=config.RANDOM_STATE + fold_idx
         )
-        print("Runninng link prediction for this fold...")
+        
+        print("Running link prediction for this fold...")
         # Run prediction for this fold
         fold_metrics, y_true, y_pred_proba = run_single_fold(
-            fold_idx, train_edges, test_pos, test_neg, train_graph,
+            fold_idx, train_pos, train_neg, test_pos, test_neg, train_graph,
             embedder, binary_operator, verbose=args.verbose
         )
         
