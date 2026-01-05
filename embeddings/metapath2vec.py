@@ -49,7 +49,7 @@ class MetaPath2VecEmbedder(BaseEmbedder):
         Generate a single metapath-guided random walk starting from start_node.
 
         Args:
-            graph (networkx.Graph): Input heterogeneous graph with node attribute "ntype".
+            graph (networkx.Graph): Input heterogeneous graph with node attribute "type".
             start_node: Node to start the walk from.
             metapath (list[str]): Sequence of node types defining the walk pattern.
 
@@ -64,7 +64,7 @@ class MetaPath2VecEmbedder(BaseEmbedder):
             neighbors = [
                 n
                 for n in graph.neighbors(current)
-                if graph.nodes[n].get("ntype") == expected_type
+                if graph.nodes[n].get("type") == expected_type
             ]
 
             if not neighbors:
@@ -80,7 +80,7 @@ class MetaPath2VecEmbedder(BaseEmbedder):
         Generate MetaPath2Vec embeddings for all nodes in the graph.
 
         Args:
-            graph (networkx.Graph): Input heterogeneous graph with node attribute "ntype".
+            graph (networkx.Graph): Input heterogeneous graph with node attribute "type".
 
         Returns:
             dict: Dictionary mapping node IDs to embedding vectors.
@@ -92,7 +92,8 @@ class MetaPath2VecEmbedder(BaseEmbedder):
         walks = []
 
         for node, attrs in graph.nodes(data=True):
-            node_type = attrs.get("ntype")
+            node_type = attrs.get("type")
+            # Use all metapaths from config.py that start with the current node's type
             for metapath in self.metapaths:
                 if node_type != metapath[0]:
                     continue
