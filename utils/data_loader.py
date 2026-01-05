@@ -15,21 +15,54 @@ def load_graph_data(filepath):
       - Source, Target
     Optional columns:
       - SourceType, TargetType
+    
+    If the first line contains "heterogeneous", infers node types from node ID prefixes
+    (e.g., 'gene:123', 'compound:456', 'disease:789')
     """
-    df = pd.read_csv(filepath)
+    # Check first line for heterogeneous indicator
+    with open(filepath, 'r') as f:
+        first_line = f.readline().strip().lower()
+    
+    #TODO: CHANGE THE FIRST LINE OF THE CSV FILE TO CHECK EVERY TIME
+    # heterogeneous_flag = 'heterogeneous' in first_line
+    heterogeneous_flag = True
+
+    with open(filepath, "rb") as f:
+        print(f.readline())
+        print(f.readline())
+    df = pd.read_csv(filepath,sep=",", engine="python")
 
     required = {"Source", "Target"}
     if not required.issubset(df.columns):
         raise ValueError("CSV must contain Source and Target columns")
 
-    df["Source"] = df["Source"].astype(str)
-    df["Target"] = df["Target"].astype(str)
-
-    if "SourceType" in df.columns and "TargetType" in df.columns:
+    heterogeneous = False
+    
+    if heterogeneous_flag:
+        # Infer node types from prefixes
+        def extract_node_type(node_id):
+            """Extract node type from prefix (e.g., 'Gene::...', 'Compound::...', 'Disease::...')"""
+            node_str = str(node_id).lower()
+            if node_str.startswith('gene::'):
+                return 'gene'
+            elif node_str.startswith('compound::'):
+                return 'compound'
+            elif node_str.startswith('disease::'):
+                return 'disease'
+            return None
+        
+        # Apply extraction to all nodes
+        df["SourceType"] = df["Source"].apply(extract_node_type)
+        df["TargetType"] = df["Target"].apply(extract_node_type)
+        heterogeneous = True
+        print("Heterogeneous graph detected from first line; extracting node types from prefixes")
+    elif "SourceType" in df.columns and "TargetType" in df.columns:
         df["SourceType"] = df["SourceType"].astype(str)
         df["TargetType"] = df["TargetType"].astype(str)
         heterogeneous = True
+        print("Heterogeneous graph detected from SourceType/TargetType columns")
     else:
+        print("Homogeneous graph detected; assigning default node type 'protein'")
         heterogeneous = False
 
     df = df[df["Source"] != df["Target"]].drop_duplicates()
@@ -40,6 +73,7 @@ def create_graph_from_edges(edge_df):
     """
     Create a NetworkX graph from edge DataFrame.
     Supports heterogeneous graphs if SourceType/TargetType are present.
+    Sets node attribute 'type' for heterogeneous graphs.
     """
     G = nx.Graph()
 
@@ -50,11 +84,12 @@ def create_graph_from_edges(edge_df):
         G.add_edge(u, v)
 
         if heterogeneous:
-            G.nodes[u]["ntype"] = row["SourceType"]
-            G.nodes[v]["ntype"] = row["TargetType"]
+            # Use 'type' attribute for metapath2vec compatibility
+            G.nodes[u]["type"] = row["SourceType"]
+            G.nodes[v]["type"] = row["TargetType"]
         else:
-            G.nodes[u]["ntype"] = "protein"
-            G.nodes[v]["ntype"] = "protein"
+            G.nodes[u]["type"] = "protein"
+            G.nodes[v]["type"] = "protein"
 
     return G
 
@@ -72,7 +107,6 @@ def generate_negative_samples(graph, num_samples, random_state=42):
         pandas.DataFrame: DataFrame with negative edges
     """
     random.seed(random_state)
-    np.random.seed(random_state)
     
     nodes = list(graph.nodes())
     negative_samples = []
@@ -81,11 +115,11 @@ def generate_negative_samples(graph, num_samples, random_state=42):
     
     while len(negative_samples) < num_samples and attempts < max_attempts:
         u, v = random.sample(nodes, 2)
+       
         
         # Ensure the edge doesn't exist and nodes are different
         if not graph.has_edge(u, v) and u != v:
             negative_samples.append({'Source': u, 'Target': v})
-        
         attempts += 1
     
     if len(negative_samples) < num_samples:
@@ -122,7 +156,8 @@ def prepare_fold_data(edges_df, train_idx, test_idx, negative_ratio=1.0, random_
         random_state (int): Random seed
         
     Returns:
-        tuple: (train_edges, test_positive_edges, test_negative_edges, train_graph)
+        tuple: (train_positive_edges, train_negative_edges,
+                test_positive_edges, test_negative_edges, train_graph)
     """
     # Split edges
     train_edges = edges_df.iloc[train_idx].copy()
@@ -132,9 +167,12 @@ def prepare_fold_data(edges_df, train_idx, test_idx, negative_ratio=1.0, random_
     print("Creating training graph...")
     train_graph = create_graph_from_edges(train_edges)
     
+    print("Generating negative samples for training...")
+    num_train_neg = int(len(train_edges) * negative_ratio)
+    train_negative = generate_negative_samples(train_graph, num_train_neg, random_state)
+
     print("Generating negative samples for testing...")
-    # Generate negative samples for testing
-    num_negative = int(len(test_edges) * negative_ratio)
-    test_negative = generate_negative_samples(train_graph, num_negative, random_state)
-    
-    return train_edges, test_edges, test_negative, train_graph
+    num_test_neg = int(len(test_edges) * negative_ratio)
+    test_negative = generate_negative_samples(train_graph, num_test_neg, random_state + 1)
+
+    return train_edges, train_negative, test_edges, test_negative, train_graph

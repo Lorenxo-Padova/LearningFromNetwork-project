@@ -6,7 +6,7 @@ import os
 # ==================== PATH CONFIGURATION ====================
 DATA_DIR = 'data'
 RESULTS_DIR = 'results'
-PPI_DATASET = os.path.join(DATA_DIR, 'PP-Pathways_ppi.csv')
+PPI_DATASET = os.path.join(DATA_DIR, 'clean_vitagraph_small.csv')
 
 # Create directories if they don't exist
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -34,8 +34,13 @@ NODE2VEC_WINDOW_SIZE = 10
 # Metapath2Vec configuration
 
 METAPATHS = [
-    ["protein", "protein"],
+    ["gene", "gene"],
+    ["disease", "disease"],
+    ["compound", "compound"],
     ["gene", "disease", "gene"],
+    ["disease", "gene", "disease"],
+    ["disease", "compound", "disease"],
+    ["compound", "disease", "compound"],
     ["gene", "compound", "disease", "compound", "gene"],
     ["compound", "gene", "compound"]
 ]
