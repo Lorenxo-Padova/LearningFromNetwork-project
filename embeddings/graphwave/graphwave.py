@@ -70,63 +70,114 @@ def chebyshev_phi(L_hat, coeffs, node_idx, order):
 
     return phi_u
 
-def graphwave_alg(graph, time_pnts, taus='auto', 
-                        verbose=False, approximate_lambda=True,
-                        order=30, nb_filters=2):
+def graphwave_alg_fast(
+    graph,
+    time_pnts,
+    taus="auto",
+    verbose=False,
+    approximate_lambda=True,
+    order=30,
+    nb_filters=2,
+):
     """
-    Memory-efficient GraphWave.
-    
-    Returns:
-        chi: np.ndarray (num_nodes x num_time_points*2*len(taus))
-        taus: list of tau scales used
+    High-memory / high-speed GraphWave implementation.
+
+    Returns
+    -------
+    chi : np.ndarray, shape (n_nodes, num_time_points * 2 * n_taus)
+    taus : list
     """
     nodes = list(graph.nodes())
     n_nodes = len(nodes)
+    num_time_points = len(time_pnts)
 
-    # Automatic tau selection
-    if taus == 'auto':
+    # ------------------------------------------------------------------
+    # Automatic tau selection (unchanged logic)
+    # ------------------------------------------------------------------
+    if taus == "auto":
         if approximate_lambda:
             l1 = 1.0 / n_nodes
         else:
             lap_mat = laplacian(nx.adjacency_matrix(graph))
             try:
-                l1 = np.sort(sp.linalg.eigsh(lap_mat, 2, which='SM', return_eigenvectors=False))[1]
-            except:
-                l1 = np.sort(sp.linalg.eigsh(lap_mat, 5, which='SM', return_eigenvectors=False))[1]
+                l1 = np.sort(
+                    sp.linalg.eigsh(
+                        lap_mat, 2, which="SM", return_eigenvectors=False
+                    )
+                )[1]
+            except Exception:
+                l1 = np.sort(
+                    sp.linalg.eigsh(
+                        lap_mat, 5, which="SM", return_eigenvectors=False
+                    )
+                )[1]
+
         smax = -np.log(0.80) * np.sqrt(0.5 / l1)
         smin = -np.log(0.95) * np.sqrt(0.5 / l1)
         taus = np.linspace(smin, smax, nb_filters)
 
+    taus = list(taus)
     n_taus = len(taus)
-    num_time_points = len(time_pnts)
-    chi = np.zeros((n_nodes, num_time_points * 2 * n_taus))
 
-    # Precompute L_hat in CSR
+    # ------------------------------------------------------------------
+    # Allocate output
+    # ------------------------------------------------------------------
+    chi = np.zeros(
+        (n_nodes, num_time_points * 2 * n_taus),
+        dtype=np.float32,
+    )
+
+    # ------------------------------------------------------------------
+    # Precompute normalized Laplacian (float32, CSR)
+    # ------------------------------------------------------------------
     lap_mat = laplacian(nx.adjacency_matrix(graph))
-    L_hat = lap_mat - sp.eye(n_nodes)
-    L_hat = L_hat.tocsr()
+    L_hat = (lap_mat - sp.eye(n_nodes)).astype(np.float32).tocsr()
 
-    # Compute embeddings
+    # ------------------------------------------------------------------
+    # Main loop over taus (no node loop!)
+    # ------------------------------------------------------------------
     for tau_idx, tau in enumerate(taus):
-        coeffs = compute_cheb_coeff_basis(tau, order)
-        for u_idx in range(n_nodes):
+        if verbose:
+            print(f"[GraphWave] Processing tau {tau_idx + 1}/{n_taus}: {tau:.5f}")
 
-            phi_u = chebyshev_phi(L_hat, coeffs, u_idx, order)  # shape: (n_nodes,)
-            # Select the single node embedding
-            phi_node = phi_u[u_idx:u_idx+1]  # shape: (1,)
-            # Pass as 2D array to charac_function
-            chi_node = charac_function(time_pnts, phi_node[np.newaxis, :])  # shape: (2*time_points, 1)
-            idx_start = tau_idx * 2 * num_time_points
-            idx_end = idx_start + 2 * num_time_points
-            chi[u_idx, idx_start:idx_end] = chi_node[:, 0]  # assign 1D slice
+        # Chebyshev coefficients (float32)
+        coeffs = np.asarray(
+            compute_cheb_coeff_basis(tau, order),
+            dtype=np.float32,
+        )
 
-            
-            if verbose and (u_idx + 1) % 3000 == 0:
-                print(f"Processed {u_idx+1}/{n_nodes} nodes for tau {tau:.4f}")
+        # --------------------------------------------------------------
+        # Batched Chebyshev recurrence
+        # --------------------------------------------------------------
+        T0 = sp.eye(n_nodes, format="csr", dtype=np.float32)
+        T1 = L_hat @ T0
+
+        # We only need the diagonal
+        phi_diag = coeffs[0] * np.ones(n_nodes, dtype=np.float32)
+        phi_diag += coeffs[1] * T1.diagonal()
+
+        for k in range(2, order + 1):
+            T2 = 2.0 * (L_hat @ T1) - T0
+            phi_diag += coeffs[k] * T2.diagonal()
+            T0, T1 = T1, T2
+
+        # --------------------------------------------------------------
+        # Characteristic function (fully vectorized)
+        # --------------------------------------------------------------
+        # Shape: (n_nodes, 1)
+        temp = phi_diag[:, None]
+
+        # Output shape: (2 * num_time_points, n_nodes)
+        chi_tau = charac_function(time_pnts, temp)
+
+        # Write into final tensor
+        idx_start = tau_idx * 2 * num_time_points
+        idx_end = idx_start + 2 * num_time_points
+        chi[:, idx_start:idx_end] = chi_tau.T
 
     if verbose:
-        print("GraphWave embedding completed.")
-    
+        print("GraphWave embedding completed (fast version).")
+
     return chi, taus
 
 
@@ -169,7 +220,14 @@ class GraphWaveEmbedder(BaseEmbedder):
         num_time_points = max(1, int(np.ceil(self.embedding_dim / (2 * self.nb_filters))))
         time_points = np.linspace(-math.pi, math.pi, num_time_points)
         
-        chi, taus = graphwave_alg(graph, time_points, taus='auto', verbose=True)
+        chi, taus = graphwave_alg_fast(
+            graph,
+            time_points,
+            taus="auto",
+            verbose=True,
+            order=self.order,
+            nb_filters=self.nb_filters,
+        )
 
         print(f"GraphWave: Generated chi with shape {chi.shape}")
         # Standardize features (chi shape: [features, nodes])
