@@ -200,7 +200,13 @@ class GCNEmbedder(BaseEmbedder):
         
         # Create mapping from node IDs to embeddings
         nodes = list(graph.nodes())
-        self.embeddings = {node: final_embeddings[i] for i, node in enumerate(nodes)}
+        self.embeddings = {}
+        for i, node in enumerate(nodes):
+            self.embeddings[node] = final_embeddings[i]
+            if (i + 1) % 10000 == 0:
+                print(f"[GCN] Embedded {i + 1} nodes")
+        
+        print(f"[GCN] Finished embedding all {len(nodes)} nodes")
         
         return self.embeddings
     
