@@ -1,17 +1,15 @@
 """
 GraphWave embedding implementation
 """
-import copy
-import time
 import math
 import numpy as np
-import scipy as sc
 import scipy.sparse as sp
+import scipy.linalg
 import networkx as nx
-from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from multiprocessing import Pool, cpu_count
 from embeddings.base_embedder import BaseEmbedder
-from embeddings.graphwave.characteristic_functions import charac_function, charac_function_multiscale
+from embeddings.graphwave.characteristic_functions import charac_function
 from embeddings.graphwave.utils.graph_tools import laplacian
 
 # Constants
@@ -23,52 +21,52 @@ ETA_MIN = 0.80
 NB_FILTERS = 2
 
 
-def compute_cheb_coeff(scale, order):
-    coeffs = [(-scale)**k * 1.0 / math.factorial(k) for k in range(order + 1)]
-    return coeffs
-
-
 def compute_cheb_coeff_basis(scale, order):
-    xx = np.array([np.cos((2 * i - 1) * 1.0 / (2 * order) * math.pi)
-                for i in range(1, order + 1)])
-    basis = [np.ones((1, order)), np.array(xx)]
-    for k in range(order + 1-2):
-        basis.append(2* np.multiply(xx, basis[-1]) - basis[-2])
-    basis = np.vstack(basis)
-    f = np.exp(-scale * (xx + 1))
-    products = np.einsum("j,ij->ij", f, basis)
-    coeffs = 2.0 / order * products.sum(1)
-    coeffs[0] = coeffs[0] / 2
-    return list(coeffs)
-
-
-def chebyshev_phi(L_hat, coeffs, node_idx, order):
-    """
-    Compute Chebyshev approximation for one node using CSR matrix dot product.
+    """Vectorized Chebyshev coefficient computation."""
+    # Compute Chebyshev nodes
+    xx = np.cos((2 * np.arange(1, order + 1) - 1) * np.pi / (2 * order))
     
-    Args:
-        L_hat: CSR Laplacian matrix (n_nodes x n_nodes)
-        coeffs: Chebyshev coefficients (list of length order+1)
-        node_idx: index of the node to compute
-        order: polynomial order
+    # Compute basis functions using recurrence (vectorized)
+    basis = np.zeros((order + 1, order))
+    basis[0] = 1.0  # T_0
+    basis[1] = xx   # T_1
     
-    Returns:
-        phi_u: np.ndarray of shape (n_nodes,)
-    """
-    n_nodes = L_hat.shape[0]
-
-    T_km2 = np.zeros(n_nodes)
-    T_km2[node_idx] = 1.0
-    T_km1 = L_hat.dot(T_km2)
-
-    phi_u = coeffs[0] * T_km2 + coeffs[1] * T_km1
-
     for k in range(2, order + 1):
-        T_k = 2 * L_hat.dot(T_km1) - T_km2
-        phi_u += coeffs[k] * T_k
-        T_km2, T_km1 = T_km1, T_k
+        basis[k] = 2 * xx * basis[k-1] - basis[k-2]
+    
+    # Compute coefficients
+    f = np.exp(-scale * (xx + 1))
+    coeffs = 2.0 / order * np.sum(f[np.newaxis, :] * basis, axis=1)
+    coeffs[0] = coeffs[0] / 2
+    
+    return coeffs.astype(np.float32)
 
-    return phi_u
+
+def _process_tau_worker(args):
+    """Worker function for parallel tau processing."""
+    tau_idx, tau, L_hat, n_nodes, order, time_pnts = args
+    
+    # Compute Chebyshev coefficients
+    coeffs = compute_cheb_coeff_basis(tau, order)
+    
+    # Batched Chebyshev recurrence (extract diagonal only)
+    T0 = sp.eye(n_nodes, format="csr", dtype=np.float32)
+    T1 = L_hat @ T0
+    
+    phi_diag = coeffs[0] * np.ones(n_nodes, dtype=np.float32)
+    phi_diag = phi_diag + coeffs[1] * np.asarray(T1.diagonal(), dtype=np.float32)
+    
+    for k in range(2, order + 1):
+        T2 = 2.0 * (L_hat @ T1) - T0
+        phi_diag = phi_diag + coeffs[k] * np.asarray(T2.diagonal(), dtype=np.float32)
+        T0, T1 = T1, T2
+    
+    # Characteristic function
+    temp = phi_diag[:, None]
+    chi_tau = charac_function(time_pnts, temp)
+    
+    return tau_idx, chi_tau.T
+
 
 def graphwave_alg_fast(
     graph,
@@ -134,49 +132,36 @@ def graphwave_alg_fast(
     L_hat = (lap_mat - sp.eye(n_nodes)).astype(np.float32).tocsr()
 
     # ------------------------------------------------------------------
-    # Main loop over taus (no node loop!)
+    # Main loop over taus (parallel processing)
     # ------------------------------------------------------------------
-    for tau_idx, tau in enumerate(taus):
+    # Prepare worker arguments
+    worker_args = [
+        (tau_idx, tau, L_hat, n_nodes, order, time_pnts)
+        for tau_idx, tau in enumerate(taus)
+    ]
+    
+    # Use multiprocessing for parallel tau computation
+    n_workers = min(len(taus), cpu_count())
+    if n_workers > 1 and len(taus) > 1:
         if verbose:
-            print(f"[GraphWave] Processing tau {tau_idx + 1}/{n_taus}: {tau:.5f}")
-
-        # Chebyshev coefficients (float32)
-        coeffs = np.asarray(
-            compute_cheb_coeff_basis(tau, order),
-            dtype=np.float32,
-        )
-
-        # --------------------------------------------------------------
-        # Batched Chebyshev recurrence
-        # --------------------------------------------------------------
-        T0 = sp.eye(n_nodes, format="csr", dtype=np.float32)
-        T1 = L_hat @ T0
-
-        # We only need the diagonal
-        phi_diag = coeffs[0] * np.ones(n_nodes, dtype=np.float32)
-        phi_diag += coeffs[1] * T1.diagonal()
-
-        for k in range(2, order + 1):
-            T2 = 2.0 * (L_hat @ T1) - T0
-            phi_diag += coeffs[k] * T2.diagonal()
-            T0, T1 = T1, T2
-
-        # --------------------------------------------------------------
-        # Characteristic function (fully vectorized)
-        # --------------------------------------------------------------
-        # Shape: (n_nodes, 1)
-        temp = phi_diag[:, None]
-
-        # Output shape: (2 * num_time_points, n_nodes)
-        chi_tau = charac_function(time_pnts, temp)
-
-        # Write into final tensor
+            print(f"[GraphWave] Using {n_workers} processes for parallel tau computation")
+        
+        with Pool(n_workers) as pool:
+            results = pool.map(_process_tau_worker, worker_args)
+    else:
+        # Fallback to sequential processing for small cases
+        results = [_process_tau_worker(args) for args in worker_args]
+    
+    # Fill chi matrix from results (maintain correct order)
+    for tau_idx, chi_tau_T in results:
         idx_start = tau_idx * 2 * num_time_points
         idx_end = idx_start + 2 * num_time_points
-        chi[:, idx_start:idx_end] = chi_tau.T
+        chi[:, idx_start:idx_end] = chi_tau_T
+        if verbose and len(taus) <= 4:
+            print(f"[GraphWave] Completed tau {tau_idx + 1}/{n_taus}")
 
     if verbose:
-        print("GraphWave embedding completed (fast version).")
+        print("GraphWave embedding completed (parallel version).")
 
     return chi, taus
 
@@ -245,6 +230,13 @@ class GraphWaveEmbedder(BaseEmbedder):
             chi_final = chi_scaled
         
         # Store embeddings in a dictionary
-        self.embeddings = {node: chi_final[i] for i, node in enumerate(graph.nodes())}
+        nodes_list = list(graph.nodes())
+        self.embeddings = {}
+        for i, node in enumerate(nodes_list):
+            self.embeddings[node] = chi_final[i]
+            if (i + 1) % 10000 == 0:
+                print(f"[GraphWave] Embedded {i + 1} nodes")
+        
+        print(f"[GraphWave] Finished embedding all {len(nodes_list)} nodes")
         
         return self.embeddings
