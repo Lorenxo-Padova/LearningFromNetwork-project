@@ -266,9 +266,12 @@ def run_pipeline(args):
     edges_df, heterogeneous = load_graph_data(args.data)
     print(f"   Total edges loaded: {len(edges_df)}")
     
-    # Create cross-validation folds
-    print(f"\n2. Creating {args.folds}-fold cross-validation splits...")
-    folds = create_cv_folds(edges_df, n_folds=args.folds, random_state=config.RANDOM_STATE)
+    # Create train-test split
+    print(f"\n2. Creating train-test split (80-20)...")
+    n_edges = len(edges_df)
+    split_idx = int(0.8 * n_edges)
+    train_idx = np.arange(split_idx)
+    test_idx = np.arange(split_idx, n_edges)
     
     # Initialize embedding method
     print(f"\n3. Initializing {args.method} embedder...")
@@ -339,36 +342,27 @@ def run_pipeline(args):
     binary_operator = config.BINARY_OPERATORS[args.binary_op]
     print(f"   Binary operator: {args.binary_op}")
     
-    # Run cross-validation
-    print(f"\n4. Running {args.folds}-fold cross-validation...")
-    all_fold_metrics = []
-    y_true_all = []
-    y_pred_proba_all = []
+    # Run train-test split prediction
+    print(f"\n4. Running train-test split prediction...")
+    print("Preparing data...")
+    train_pos, train_neg, test_pos, test_neg, train_graph = prepare_fold_data(
+        edges_df, train_idx, test_idx, 
+        negative_ratio=config.NEGATIVE_SAMPLING_RATIO,
+        random_state=config.RANDOM_STATE
+    )
     
-    for fold_idx, (train_idx, test_idx) in enumerate(tqdm(folds, desc="Folds")):
-        # Prepare fold data
-        print("Preparing fold data...")
-        train_pos, train_neg, test_pos, test_neg, train_graph = prepare_fold_data(
-            edges_df, train_idx, test_idx, 
-            negative_ratio=config.NEGATIVE_SAMPLING_RATIO,
-            random_state=config.RANDOM_STATE + fold_idx
-        )
-        
-        print("Running link prediction for this fold...")
-        # Run prediction for this fold
-        fold_metrics, y_true, y_pred_proba = run_single_fold(
-            fold_idx, train_pos, train_neg, test_pos, test_neg, train_graph,
-            embedder, binary_operator, verbose=args.verbose
-        )
-        
-        all_fold_metrics.append(fold_metrics)
-        y_true_all.append(y_true)
-        y_pred_proba_all.append(y_pred_proba)
+    print("Running link prediction...")
+    metrics, y_true, y_pred_proba = run_single_fold(
+        0, train_pos, train_neg, test_pos, test_neg, train_graph,
+        embedder, binary_operator, verbose=args.verbose
+    )
     
-    # Aggregate results
-    print("\n5. Aggregating results...")
-    aggregated_metrics = aggregate_cv_results(all_fold_metrics)
-    print_cv_summary(aggregated_metrics)
+    # Use single fold metrics directly
+    print("\n5. Results...")
+    aggregated_metrics = metrics
+    y_true_all = [y_true]
+    y_pred_proba_all = [y_pred_proba]
+    print_metrics(metrics)
     
     # Save results
     print(f"\n6. Saving results to {args.output_dir}...")
@@ -381,13 +375,12 @@ def run_pipeline(args):
         'config': {
             'method': args.method,
             'embedding_dim': args.embedding_dim,
-            'n_folds': args.folds,
+            'split': 'train-test (80-20)',
             'binary_operator': args.binary_op,
             'walk_length': config.WALK_LENGTH,
             'num_walks': config.NUM_WALKS,
         },
-        'fold_results': all_fold_metrics,
-        'aggregated': aggregated_metrics
+        'metrics': aggregated_metrics
     }
     
     # Save text results
@@ -406,7 +399,7 @@ def run_pipeline(args):
     print(f"\n{'='*60}")
     print(f"Pipeline completed in {elapsed_time:.2f} seconds")
     print(f"{'='*60}")
-    print(f"\nFinal AUC-ROC: {aggregated_metrics['auc_roc']['mean']:.4f} ± {aggregated_metrics['auc_roc']['std']:.4f}")
+    print(f"\nTest AUC-ROC: {aggregated_metrics['auc_roc']:.4f}")
 
 if __name__ == "__main__":
     args = parse_arguments()
