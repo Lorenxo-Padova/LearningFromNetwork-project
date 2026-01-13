@@ -13,6 +13,7 @@ import os
 import config
 
 # Import utilities
+
 from utils.data_loader import (
     load_graph_data, create_cv_folds, prepare_fold_data
 )
@@ -29,6 +30,7 @@ from embeddings.graphwave.graphwave import GraphWaveEmbedder
 from embeddings.metapath2vec import MetaPath2VecEmbedder
 from embeddings.GATher import GATherEmbedder
 from embeddings.graphSAGE import GraphSAGEEmbedder
+from embeddings.GCN import GCNEmbedder
 
 # Available embedding methods
 EMBEDDING_METHODS = {
@@ -37,7 +39,8 @@ EMBEDDING_METHODS = {
     'graphwave': GraphWaveEmbedder,
     'metapath2vec': MetaPath2VecEmbedder,
     'gather': GATherEmbedder,
-    'graphsage': GraphSAGEEmbedder
+    'graphsage': GraphSAGEEmbedder,
+    'gcn': GCNEmbedder
 }
 
 def parse_arguments():
@@ -311,6 +314,17 @@ def run_pipeline(args):
         walks_per_node=config.METAPATH_WALKS_PER_NODE,
         window_size=config.METAPATH_WINDOW_SIZE,
         workers=config.WORKERS_COUNT,
+        random_state=config.RANDOM_STATE
+    )
+    elif args.method == 'gcn':
+        embedder = GCNEmbedder(
+        embedding_dim=args.embedding_dim,
+        hidden_dim=config.GNN_HIDDEN_DIM if hasattr(config, 'GNN_HIDDEN_DIM') else 64,
+        num_layers=config.GCN_LAYERS if hasattr(config, 'GCN_LAYERS') else 2,
+        epochs=config.GNN_EPOCHS if hasattr(config, 'GNN_EPOCHS') else 200,
+        lr=config.GNN_LEARNING_RATE if hasattr(config, 'GNN_LEARNING_RATE') else 0.01,
+        weight_decay=config.GNN_WEIGHT_DECAY if hasattr(config, 'GNN_WEIGHT_DECAY') else 5e-4,
+        dropout=config.GNN_DROPOUT if hasattr(config, 'GNN_DROPOUT') else 0.5,
         random_state=config.RANDOM_STATE
     )
     elif args.method == 'gather':

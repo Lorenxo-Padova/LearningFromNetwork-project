@@ -59,6 +59,9 @@ GNN_DROPOUT = 0.5
 # GAT specific
 GAT_HEADS = 4
 
+# GCN specific
+GCN_LAYERS = 2
+
 # GraphSAGE specific
 GRAPHSAGE_LAYERS = 2
 
