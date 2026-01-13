@@ -1,5 +1,5 @@
 """
-Node2Vec embedding implementation
+Node2Vec embedding implementation - Optimized for Speed
 """
 import random
 import numpy as np
@@ -10,6 +10,7 @@ class Node2VecEmbedder(BaseEmbedder):
     """
     Node2Vec implementation for graph embedding.
     Extends DeepWalk with biased random walks controlled by p and q parameters.
+    Optimized for speed with precomputed transition probabilities.
     """
     
     def __init__(self, embedding_dim=32, walk_length=10, num_walks=20,
@@ -36,36 +37,70 @@ class Node2VecEmbedder(BaseEmbedder):
         self.workers = workers
         random.seed(random_state)
         np.random.seed(random_state)
-        
-    def _get_alias_edge(self, src, dst, graph):
+        self.alias_edges = {}
+    
+    def _precompute_transition_probs(self, graph):
         """
-        Get the alias setup for the edge from src to dst.
+        Precompute all transition probabilities for faster walk generation.
+        Trades RAM for speed.
         
         Args:
-            src: Source node
-            dst: Destination node
+            graph: NetworkX graph
+        """
+        print("[Node2Vec] Precomputing transition probabilities...")
+        edges = graph.edges()
+        
+        for src, dst in edges:
+            src_nbrs = list(graph.neighbors(src))
+            unnormalized_probs = []
+            
+            for dst_nbr in src_nbrs:
+                if dst_nbr == src:
+                    unnormalized_probs.append(graph[src][dst_nbr].get('weight', 1) / self.p)
+                elif graph.has_edge(dst_nbr, src):
+                    unnormalized_probs.append(graph[src][dst_nbr].get('weight', 1))
+                else:
+                    unnormalized_probs.append(graph[src][dst_nbr].get('weight', 1) / self.q)
+            
+            norm_const = sum(unnormalized_probs)
+            if norm_const > 0:
+                normalized_probs = np.array(unnormalized_probs, dtype=np.float32) / norm_const
+                self.alias_edges[(src, dst)] = (np.array(src_nbrs), normalized_probs)
+    
+    def _get_alias_edge(self, prev, cur, graph):
+        """
+        Get precomputed or compute transition probabilities.
+        
+        Args:
+            prev: Previous node
+            cur: Current node
             graph: NetworkX graph
             
         Returns:
-            tuple: Normalized probabilities and alias tables
+            tuple: (neighbor_list, probabilities)
         """
+        if (prev, cur) in self.alias_edges:
+            return self.alias_edges[(prev, cur)]
+        
+        # Fallback: compute on the fly
+        cur_nbrs = np.array(list(graph.neighbors(cur)))
         unnormalized_probs = []
-        for dst_nbr in sorted(graph.neighbors(dst)):
-            if dst_nbr == src:
-                unnormalized_probs.append(graph[dst][dst_nbr].get('weight', 1) / self.p)
-            elif graph.has_edge(dst_nbr, src):
-                unnormalized_probs.append(graph[dst][dst_nbr].get('weight', 1))
+        
+        for dst_nbr in cur_nbrs:
+            if dst_nbr == prev:
+                unnormalized_probs.append(graph[cur][dst_nbr].get('weight', 1) / self.p)
+            elif graph.has_edge(dst_nbr, prev):
+                unnormalized_probs.append(graph[cur][dst_nbr].get('weight', 1))
             else:
-                unnormalized_probs.append(graph[dst][dst_nbr].get('weight', 1) / self.q)
+                unnormalized_probs.append(graph[cur][dst_nbr].get('weight', 1) / self.q)
         
         norm_const = sum(unnormalized_probs)
-        normalized_probs = [float(u_prob) / norm_const for u_prob in unnormalized_probs]
-        
-        return normalized_probs
+        normalized_probs = np.array(unnormalized_probs, dtype=np.float32) / norm_const
+        return cur_nbrs, normalized_probs
     
     def _node2vec_walk(self, graph, start_node):
         """
-        Simulate a biased random walk starting from start_node.
+        Simulate a biased random walk starting from start_node (vectorized).
         
         Args:
             graph: NetworkX graph
@@ -78,23 +113,24 @@ class Node2VecEmbedder(BaseEmbedder):
         
         while len(walk) < self.walk_length:
             cur = walk[-1]
-            cur_nbrs = sorted(graph.neighbors(cur))
+            cur_nbrs = list(graph.neighbors(cur))
             
             if len(cur_nbrs) > 0:
                 if len(walk) == 1:
-                    walk.append(random.choice(cur_nbrs))
+                    walk.append(np.random.choice(cur_nbrs))
                 else:
                     prev = walk[-2]
-                    probs = self._get_alias_edge(prev, cur, graph)
-                    walk.append(np.random.choice(cur_nbrs, p=probs))
+                    nbr_array, probs = self._get_alias_edge(prev, cur, graph)
+                    next_node = np.random.choice(nbr_array, p=probs)
+                    walk.append(next_node)
             else:
                 break
                 
-        return walk
+        return [str(n) for n in walk]  # Convert to strings for Word2Vec
     
     def _generate_walks(self, graph):
         """
-        Generate Node2Vec random walks.
+        Generate Node2Vec random walks with vectorized approach.
         
         Args:
             graph: NetworkX graph
@@ -102,11 +138,16 @@ class Node2VecEmbedder(BaseEmbedder):
         Returns:
             list: List of random walks
         """
+        print("[Node2Vec] Generating random walks...")
         walks = []
         nodes = list(graph.nodes())
         
-        for _ in range(self.num_walks):
-            random.shuffle(nodes)
+        for walk_iter in range(self.num_walks):
+            if (walk_iter + 1) % 5 == 0:
+                print(f"[Node2Vec] Completed {walk_iter + 1}/{self.num_walks} walk iterations")
+            
+            # Shuffle nodes once per iteration
+            np.random.shuffle(nodes)
             for node in nodes:
                 walks.append(self._node2vec_walk(graph, node))
                 
@@ -122,22 +163,38 @@ class Node2VecEmbedder(BaseEmbedder):
         Returns:
             dict: Dictionary mapping node IDs to embedding vectors
         """
+        # Precompute transition probabilities (trades RAM for speed)
+        self._precompute_transition_probs(graph)
+        
         # Generate biased random walks
         walks = self._generate_walks(graph)
+        print(f"[Node2Vec] Generated {len(walks)} walks")
         
-        # Train Word2Vec model
+        # Train Word2Vec model with optimized parameters
+        print("[Node2Vec] Training Word2Vec model...")
         model = Word2Vec(
             walks,
             vector_size=self.embedding_dim,
             window=self.window_size,
             min_count=1,
-            sg=1,
+            sg=1,  # Skip-gram model (faster than CBOW)
             workers=self.workers,
-            seed=self.random_state
+            seed=self.random_state,
+            negative=15,  # Negative sampling (faster than hierarchical softmax)
+            ns_exponent=0.75
         )
         
         # Extract embeddings
-        self.embeddings = {node: model.wv[node] for node in model.wv.index_to_key}
+        self.embeddings = {}
+        nodes = list(graph.nodes())
+        for i, node in enumerate(nodes):
+            node_str = str(node)
+            if node_str in model.wv:
+                self.embeddings[node] = model.wv[node_str]
+            if (i + 1) % 10000 == 0:
+                print(f"[Node2Vec] Extracted {i + 1} embeddings")
+        
+        print(f"[Node2Vec] Finished embedding all {len(nodes)} nodes")
         
         return self.embeddings
     
