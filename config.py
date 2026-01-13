@@ -56,6 +56,9 @@ GNN_LEARNING_RATE = 0.01
 GNN_WEIGHT_DECAY = 5e-4
 GNN_DROPOUT = 0.5
 
+# GCN specific
+GCN_LAYERS = 2
+
 # GAT specific
 GAT_HEADS = 4
 
