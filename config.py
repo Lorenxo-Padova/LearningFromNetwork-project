@@ -6,7 +6,7 @@ import os
 # ==================== PATH CONFIGURATION ====================
 DATA_DIR = 'data'
 RESULTS_DIR = 'results'
-PPI_DATASET = os.path.join(DATA_DIR, 'clean_vitagraph_small.csv')
+PPI_DATASET = os.path.join(DATA_DIR, 'drug_gene_disease_network.csv')
 
 # Create directories if they don't exist
 os.makedirs(DATA_DIR, exist_ok=True)
