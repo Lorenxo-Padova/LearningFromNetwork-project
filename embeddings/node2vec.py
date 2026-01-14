@@ -148,8 +148,10 @@ class Node2VecEmbedder(BaseEmbedder):
             
             # Shuffle nodes once per iteration
             np.random.shuffle(nodes)
-            for node in nodes:
+            for idx, node in enumerate(nodes):
                 walks.append(self._node2vec_walk(graph, node))
+                if (idx + 1) % 10000 == 0:
+                    print(f"[Node2Vec] Generated walks for {idx + 1} nodes in iteration {walk_iter + 1}")
                 
         return walks
     
