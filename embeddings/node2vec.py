@@ -80,11 +80,15 @@ class Node2VecEmbedder(BaseEmbedder):
     def _generate_walks(self, graph):
         nodes = list(graph.nodes())
         walks = []
+        walk_count = 0
 
         for _ in range(self.num_walks):
             random.shuffle(nodes)
             for node in nodes:
                 walks.append(self._node2vec_walk(graph, node))
+                walk_count += 1
+                if walk_count % 10000 == 0:
+                    print(f"[Node2Vec] Generated {walk_count} walks")
 
         return walks
 
