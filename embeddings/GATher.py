@@ -120,6 +120,8 @@ class GATherEmbedder(BaseEmbedder):
         # Prepare data
         data = self._prepare_data(graph)
         in_channels = data.x.size(1)
+
+        print(f"[GATher] Starting embedding for {data.num_nodes} nodes with feature dimension {in_channels}")
         
         # Initialize model
         model = GATModel(
