@@ -1,0 +1,1057 @@
+---
+title: "Data procesing: analysis of the datasets and creation of the final dataset"
+subtitle: "Learning from Networks - project"
+author: "Matteo Meneghin"
+date: "`r Sys.Date()`"
+output: 
+  bookdown::pdf_document2: 
+    toc: true
+    fig_height: 6
+    number_sections: true
+editor_options: 
+  markdown: 
+    wrap: 80
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, message = FALSE)
+```
+
+# The initial datasets
+
+The data of our project are taken from 3 different sources:
+
+- **VitaGraph** presented in <https://arxiv.org/abs/2505.11185> and available at <https://www.kaggle.com/datasets/gianlucadecarlods/vitagraph/>
+- Comparative Toxicogenomics Database (**ctd**) which offers different datasets at <https://ctdbase.org/downloads>, we only consider 5 of them
+- Stanford Biomedical Network Dataset Collection (**SNAP**) offers different datasets at <https://snap.stanford.edu/biodata/index.html>, we only consider 7 of them
+
+## Setup RStudio and download the data
+
+Setup the working directory in RStudio to the source file location, so we can use relative path for the files already uploaded on GitHub.
+
+### VitaGraph
+
+`vitagrapgh.tsv` file is available at <https://www.kaggle.com/datasets/gianlucadecarlods/vitagraph/>.
+
+```{r load-vitagraph}
+vitaGRAPH <- read.table("vitagraph/vitagraph.tsv", header = TRUE)
+head(vitaGRAPH)
+```
+
+### CTD
+
+The files from CTD that we consider are:
+
+| File name | Where to find it                        |
+|------------------------------|-----------------------------------|
+| `CTD_chem_gene_ixns.tsv.gz`          | <https://ctdbase.org/downloads/#cg>     |
+| `CTD_curated_chemicals_diseases.tsv.gz`          | <https://ctdbase.org/downloads/#c_cd>   |
+| `CTD_chemicals_diseases.tsv.gz`          | <https://ctdbase.org/downloads/#cd>     |
+| `CTD_curated_genes_diseases.tsv.gz`          | <https://ctdbase.org/downloads/#c_gd>   |
+| `CTD_genes_diseases.tsv.gz`          | <https://ctdbase.org/downloads/#agg_gd> |
+
+```{r load-ctd}
+if (!require("tidyverse")) install.packages("tidyverse")
+library(tidyverse)
+
+files_to_load <- list(
+  "CTD_CG"     = "CTD datasets/CTD_chem_gene_ixns.tsv.gz",
+  "CTD_CD"     = "CTD datasets/CTD_chemicals_diseases.tsv.gz",
+  "CTD_CD_cur" = "CTD datasets/CTD_curated_chemicals_diseases.tsv.gz",
+  "CTD_GD"     = "CTD datasets/CTD_genes_diseases.tsv.gz",
+  "CTD_GD_cur" = "CTD datasets/CTD_curated_genes_diseases.tsv.gz"
+)
+
+load_ctd_tsv <- function(path) {
+  lines <- readLines(path, n = 100)
+  header_idx <- grep("ChemicalName|GeneSymbol|DiseaseName", lines)[1]
+  
+  if (is.na(header_idx)) {
+    stop(paste("Not able to find the header:", path))
+  }
+
+  # Clean the header row
+  header_names <- lines[header_idx] %>%
+    gsub("^# ", "", .) %>%  # Remove the initial "# "
+    strsplit("\t") %>%
+    unlist() %>%
+    trimws() # Remove hidden spaces
+  
+  read_tsv(
+    path,
+    skip = header_idx, 
+    comment = "#",
+    col_names = header_names,
+    show_col_types = FALSE
+  )
+}
+
+for (obj_name in names(files_to_load)) {
+  assign(obj_name, load_ctd_tsv(files_to_load[[obj_name]]), envir = .GlobalEnv)
+}
+```
+
+Clean the data.
+
+```{r ctd-clean-data}
+# Select only the 2 columns of interest
+CTD_CG <- CTD_CG[, c("ChemicalName", "GeneID")]
+CTD_CD <- CTD_CD[, c("ChemicalName", "DiseaseID")]
+CTD_CD_cur <- CTD_CD_cur[, c("ChemicalName", "DiseaseID")]
+CTD_GD <- CTD_GD[, c("GeneID", "DiseaseID")]
+CTD_GD_cur <- CTD_GD_cur[, c("GeneID", "DiseaseID")]
+
+# Unify data.frame with same column type
+CTD_CD <- CTD_CD %>%
+  bind_rows(CTD_CD_cur) %>%
+  distinct()
+CTD_GD <- CTD_GD %>%
+  bind_rows(CTD_GD_cur) %>%
+  distinct()
+```
+
+### SNAP
+
+The files from SNAP that we consider are:
+
+| File name | Where to find it |
+|----------------------------------------|----------------------------------------|
+| `ChG-InterDecagon_targets.csv.gz` | <https://snap.stanford.edu/biodata/datasets/10016/10016-ChG-InterDecagon.html> |
+| `ChCh-Miner_durgbank-chem-chem.tsv.gz` | <https://snap.stanford.edu/biodata/datasets/10001/10001-ChCh-Miner.html> |
+| `ChG-Miner_miner-chem-gene.tsv.gz` | <https://snap.stanford.edu/biodata/datasets/10002/10002-ChG-Miner.html> |
+| `ChG-TargetDecagon_targets.csv.gz` | <https://snap.stanford.edu/biodata/datasets/10015/10015-ChG-TargetDecagon.html> |
+| `DCh-Miner_miner-disease-chemical.tsv.gz` | <https://snap.stanford.edu/biodata/datasets/10004/10004-DCh-Miner.html> |
+| `DD-Miner_miner-disease-disease.tsv.gz` | <https://snap.stanford.edu/biodata/datasets/10006/10006-DD-Miner.html> |
+| `DG-Miner_miner-disease-gene.tsv.gz` | <https://snap.stanford.edu/biodata/datasets/10020/10020-DG-Miner.html> |
+
+```{r load-snap-1}
+SNAPChCh <- read.table("SNAP datasets/ChCh-Miner_durgbank-chem-chem.tsv.gz",
+                       col.names = c("Drug.Drugbank", "Drug.Drugbank"))
+head(SNAPChCh)
+```
+
+```{r load-snap-2}
+SNAPChG_ID <- read.table("SNAP datasets/ChG-InterDecagon_targets.csv.gz", sep=",",
+                         col.names = c("Drug.Pubchem", "Gene.NCBI"))
+head(SNAPChG_ID)
+```
+
+```{r load-snap-3}
+SNAPChG_M <- read.table("SNAP datasets/ChG-Miner_miner-chem-gene.tsv.gz",
+                        col.names = c("Drug.Drugbank", "Gene.Uniprot"))
+head(SNAPChG_M)
+```
+
+```{r load-snap-4}
+SNAPChG_TD <- read.table("SNAP datasets/ChG-TargetDecagon_targets.csv.gz", sep=",",
+                         col.names = c("Drug.Pubchem", "Gene.NCBI"))
+head(SNAPChG_TD)
+```
+
+```{r load-snap-5}
+SNAPDCh <- read.table("SNAP datasets/DCh-Miner_miner-disease-chemical.tsv.gz",
+                      col.names = c("Disease.MESH", "Drug.Drugbank"))
+head(SNAPDCh)
+```
+
+```{r load-snap-6}
+SNAPDD <- read.table("SNAP datasets/DD-Miner_miner-disease-disease.tsv.gz",
+                     col.names = c("Disease.DOID)", "Disease.DOID)"))
+head(SNAPDD)
+```
+
+```{r load-snap-7}
+SNAPDG_M <- read.table("SNAP datasets/DG-Miner_miner-disease-gene.tsv.gz",
+                       col.names = c("Disease.MESH)", "Gene.Uniprot)"))
+head(SNAPDG_M)
+```
+
+Clean the data.
+
+```{r snap-clean-data}
+# Unify data.frame with same column type
+SNAPChG_DG <- SNAPChG_ID %>%
+  bind_rows(SNAPChG_TD) %>%
+  distinct()
+```
+
+## Analyze the data
+
+In our final dataset we want only three types of nodes: gene, drug and disease. But as we have seen above, there aren't unique identifiers for the wanted types.
+
+So first we analyze how many types of identifires are present and how many nodes for each identifiers are presents.
+
+### Count the nodes types
+
+Starting from vitagraph, we analyze only the two columns with the nodes values.
+
+```{r vitagraph-count-nodes}
+# Extract all the identifiers from the first and third column
+identifiers <- c(vitaGRAPH[, 1], vitaGRAPH[, 3])
+# Use a specific regular expression to target TYPE::IDENTIFIER
+prefixes_extracted <- sub("^([^:]+::[^:]+):.*", "\\1", identifiers)
+# Find the unique values of the extracted prefixes
+unique_prefixes <- unique(prefixes_extracted)
+length(unique_prefixes)
+unique_prefixes
+```
+
+The dataset has 14 different types of node, but we will only consider the one
+related to gene, drug (compound) and disease.
+
+```{r vitagraph-valid}
+valid_nodes_vitagraph <- c("Gene::NCBI","Compound::PubChem_Compounds",
+                           "Compound::molport","Compound::zinc",
+                           "Compound::CHEMBL","Disease::bioarx",
+                           "Disease::MESH", "Compound::CHEBI",
+                           "Disease::DOID","Gene::drugbank","Disease::OMIM")
+```
+
+From the appendix B of its paper (<https://arxiv.org/abs/2505.11185>), we know how many nodes are presents for type:
+
+- Gene::NCBI: 20 844
+- Compound::PubChem_Compounds: 15 302
+- Compound::molport: 221
+- Compound::zinc: 53
+- Compound::CHEMBL: 77
+- Disease::bioarx: 27
+- Disease::MESH: 2 356
+- Compound::CHEBI: 176
+- Disease::DOID: 2 390
+- Gene::drugbank: 62
+- Disease::OMIM: 31
+
+In the CTD datasets, to count the number of nodes of a specific type of identifier, we manually select the columns the columns with the same header and we unified in a single vector for counting the unique values. Since in the same dataset were present different types of disease identifiers, we first createa single vector of disease and then separate them with RegEx.
+
+```{r ctd-count-nodes}
+# Gene::NCBI
+CTD_ncbi <- unique(c(CTD_GD[[2]],CTD_CG[[2]]))
+length(CTD_ncbi)
+# Drug::MESH
+CTD_mesh_drug <- unique(c(CTD_CG[[1]], CTD_CD[[1]]))
+length(CTD_mesh_drug)
+# Diseases
+CTD_all_disease <- c(
+  as.character(CTD_CD[[2]]), 
+  as.character(CTD_GD[[1]])
+)
+CTD_all_disease <- CTD_all_disease[!is.na(CTD_all_disease)]
+# Disease::MESH
+CTD_mesh_disease <- CTD_all_disease[grep("^MESH:", CTD_all_disease)]
+length(unique(CTD_mesh_disease))
+# Disease::OMIM
+CTD_omim <- CTD_all_disease[grep("^OMIM:", CTD_all_disease)]
+length(unique(CTD_omim))
+```
+
+In the SNAP datasets, to count the number of nodes of a specific type of identifier, we manually select the columns the columns with the same header and we unified in a single vector for counting the unique values. We used `unlist()` if all the dataset is considered in the counting.
+
+```{r snap-count-nodes}
+# Disease::DOID
+SNAP_doid <- unique(unlist(SNAPDD))
+length(SNAP_doid)
+# Disease::MESH
+SNAP_mesh <- unique(c(SNAPDG_M[[1]], SNAPDCh[[1]]))
+length(SNAP_mesh)
+# Gene::Uniprot
+SNAP_uniprot <- unique(c(SNAPChG_M[[2]], SNAPDG_M[[2]]))
+length(SNAP_uniprot)
+# Gene::NCBI
+SNAP_ncbi <- unique(c(SNAPChG_ID[[2]],SNAPChG_TD[[2]]))
+length(SNAP_ncbi)
+# Drug::PubChem_Compounds
+SNAP_pubchem <- unique(c(SNAPChG_ID[[1]],SNAPChG_TD[[1]]))
+length(SNAP_pubchem)
+# Drug::Drugbank
+SNAP_db <- unique(c(SNAPChG_M[[1]],SNAPDCh[[2]], unlist(SNAPChCh)))
+length(SNAP_db)
+```
+
+Here a summary table:
+
+```{r count-summary, echo = FALSE}
+if (!require("kableExtra")) install.packages("kableExtra")
+library(kableExtra)
+
+df <- data.frame(
+  Type = c("DISEASE total", "DOID", "MESH", "OMIM", "UMLS", "bioarx",
+           "GENE total", "NCBI", "Drugbank", "Uniprot",
+           "DRUG total", "Pubchem compounds", "MESH", "drugbank", "molport", "zinc", "CHEMBL", "CHEBI"),
+  
+              # tot - DOID - MESH - OMIM - UMLS - bioarx
+  VitaGraph = c("9581", "2390", "2356", "31", "-", "27",
+                # tot - NCBI - DB - Uniprot
+                "20906", "20844", "62", "-", 
+                # tot - PC comp - MESH - DB - molport - zinc - CHEMBL - CHEBI
+                "15829", "15302", "-", "-", "221", "53", "77", "176"),
+  
+        # tot - DOID - MESH - OMIM - UMLS - bioarx
+  ctd = c("7294", "-", "5854", "1440", "-", "-", 
+          # tot - NCBI - DB - Uniprot
+          "57625", "57625", "-", "-", 
+          # tot - PC comp - MESH - DB - molport - zinc - CHEMBL - CHEBI
+          "17964", "-", "17964", "-", "-", "-", "-", "-"),
+  
+         # tot - DOID - MESH - OMIM - UMLS - bioarx
+  SNAP = c("13074", "6878", "5677", "-", "519", "-", 
+           # tot - NCBI - DB - Uniprot
+           "29906", "11759", "-", "18147", 
+           # tot - PC comp - MESH - DB - molport - zinc - CHEMBL - CHEBI
+           "7294", "1774", "-", "5520", "-", "-", "-", "-")
+)
+
+# Write in latex code the table
+df %>%
+  kbl(format = "latex", booktabs = TRUE, align = "lrrr", escape = FALSE) %>%
+  row_spec(c(1, 7, 11), bold = TRUE)
+```
+
+We have established a primary identifier for each node type and we will ignore the one with few occurrences, so the data used are:
+
+```{r new-count-summary, echo = FALSE}
+if (!require("kableExtra")) install.packages("kableExtra")
+library(kableExtra)
+
+df <- data.frame(
+  Type = c("DISEASE total", "DOID", "MESH - primary key", "OMIM", 
+           "GENE total", "NCBI - primary key", "Uniprot",
+           "DRUG total", "Pubchem compounds - primary key", "MESH", "drugbank"),
+  
+              # tot - DOID - MESH - OMIM
+  VitaGraph = c("4777", "2390", "2356", "31", 
+                # tot - NCBI - Uniprot
+                "20844", "20844", "-", 
+                # tot - PC comp - MESH - DB
+                "15302", "15302", "-", "-"),
+  
+        # tot - DOID - MESH - OMIM
+  ctd = c("2024", "-", "5854", "1440", 
+          # tot - NCBI - Uniprot
+          "57625", "57625", "-", 
+          # tot - PC comp - MESH - DB
+          "17964", "-", "17964", "-"),
+  
+         # tot - DOID - MESH - OMIM
+  SNAP = c("12555", "6878", "5677", "-", 
+           # tot - NCBI - Uniprot
+           "29906", "11759", "18147", 
+           # tot - PC comp - MESH - DB
+           "7294", "1774", "-", "5520")
+)
+
+# Write in latex code the table
+df %>%
+  kbl(format = "latex", booktabs = TRUE, align = "lrrr", escape = FALSE) %>%
+  row_spec(c(1, 5, 8), bold = TRUE)
+```
+
+Now we need to map the data, not already in a 'primary key' type, to a valid identifier.
+
+## Mapping the nodes to a valid identifier
+
+### Disease - identifier: MESH
+
+We will ignore the few entries from bioarx and UMLS. For converting from DOID and OMIM to MESH we will use two different files as ‘map’ to try to cover more DOID and OMIM possible.
+
+-   First file at
+    <https://raw.githubusercontent.com/natacourby/Disease_ontologies_for_knowledge_graphs/refs/heads/master/data/prepared_ontologies/cross_references.tsv>
+
+It's a .tsv, easily parsable with `read_tsv`.
+
+```{r load-cross-ref}
+if (!require("readr")) install.packages("readr")
+library(readr)
+
+cross_ref <- read_tsv(
+  "https://raw.githubusercontent.com/natacourby/Disease_ontologies_for_knowledge_graphs/refs/heads/master/data/prepared_ontologies/cross_references.tsv", 
+  show_col_types = FALSE
+)
+MESH_cross_ref <- cross_ref[,c("MESH", "DOID", "OMIM")]
+
+# Removes rows in which MESH=NA, or both DOID and OMIM are NA
+MESH_cross_ref <- subset(MESH_cross_ref, 
+                        !is.na(MESH) & (!is.na(DOID) | !is.na(OMIM)))
+```
+
+We analyze the duplicates, to understand how to manage data.
+
+```{r mesh-doid-omim-1}
+duplicates_summary <- sapply(MESH_cross_ref, function(x) {
+  clean_x <- x[!is.na(x)]
+  
+  total_ids <- length(clean_x)
+  unique_ids <- length(unique(clean_x))
+  
+  return(c(
+    Total_IDs = total_ids, 
+    Unique_IDs = unique_ids, 
+    Dups = total_ids - unique_ids
+  ))
+})
+print(duplicates_summary)
+```
+
+We can see that we have 6 duplicates of MESH.
+
+```{r mesh-doid-omim-2}
+if (!require("dplyr")) install.packages("dplyr")
+library(dplyr)
+
+mesh_dup <- MESH_cross_ref %>%
+  group_by(MESH) %>%
+  filter(n() > 1 & !is.na(MESH)) %>%
+  arrange(MESH)
+
+print(mesh_dup)
+```
+
+This isn't a problem, simply different OMIM or different DOID map to the same
+MESH.
+
+There aren't DOID duplicates, so we focus on the OMIM duplicates:
+
+```{r mesh-doid-omim-3}
+omim_dup <- MESH_cross_ref %>%
+  group_by(OMIM) %>%
+  filter(n() > 1 & !is.na(OMIM))
+
+print(omim_dup)
+```
+
+This is a problem, the same OMIM (OMIM_162900) map to different MESH.
+
+We can delete row "D009506, NA, OMIM_162900" because the initial D of the code
+identifies "Chemicals and Drugs", so we will consider the one with the initial C
+that identifies "Diseases". See
+<https://en.wikipedia.org/wiki/Medical_Subject_Headings#Categories> for
+reference.
+
+```{r mesh-doid-omim-4}
+# Delete the specific row: D009506, NA, OMIM_162900
+MESH_cross_ref <- subset(MESH_cross_ref, 
+                                 !(MESH == "D009506" & is.na(DOID) 
+                                   & OMIM == "OMIM_162900"))
+```
+
+We clean `MESH_cross_ref` removing the prefixes and explode lines with multiple
+values.
+
+```{r mesh-doid-omim-5}
+if (!require("stringr")) install.packages("stringr")
+library(stringr)
+if (!require("tidyr")) install.packages("tidyr")
+library(tidyr)
+
+# Clean the data.frame removing prefixes
+MESH_cross_ref <- MESH_cross_ref %>%
+  mutate(
+    DOID = str_remove_all(DOID, "DOID[:_]"),
+    OMIM = str_remove_all(OMIM, "OMIM[:_]"),
+    MESH = str_remove_all(MESH, "MESH:")
+  )
+
+# Explodes OMIM and DOID lines with more values
+# Separate by "|" or ","
+MESH_cross_ref <- MESH_cross_ref %>%
+  separate_rows(DOID, sep = "\\|") %>%
+  separate_rows(DOID, sep = ",") %>%
+  separate_rows(OMIM, sep = "\\|") %>%
+  separate_rows(OMIM, sep = ",") %>%
+  mutate(across(everything(), str_trim)) %>%
+  distinct()
+```
+
+-   Second file at
+    <https://raw.githubusercontent.com/DiseaseOntology/HumanDiseaseOntology/main/src/ontology/doid.obo>
+
+More complex to parse.
+
+```{r load-obo}
+if (!require("ontologyIndex")) install.packages("ontologyIndex")
+library(ontologyIndex)
+
+# Load the ontology (extract_tags = "everything" is required to get 'xref')
+url <- "https://raw.githubusercontent.com/DiseaseOntology/HumanDiseaseOntology/main/src/ontology/doid.obo"
+doid_onto <- get_ontology(url, extract_tags = "everything")
+
+# Helper function to extract specific prefix from the xref list
+extract_xref <- function(xref_list, prefix) {
+  # Find all strings in the list that start with the prefix (e.g., "MESH:")
+  matches <- grep(paste0("^", prefix), xref_list, value = TRUE)
+  # Clean the prefix from the result (e.g., "MESH:D006394" -> "D006394")
+  clean_matches <- gsub(paste0("^", prefix, ":"), "", matches)
+  # Collapse multiple matches with a comma if they exist
+  if (length(clean_matches) > 0) return(paste(clean_matches, collapse = ", ")) 
+  else return(NA)
+}
+
+MESH_obo <- data.frame(
+  MESH = sapply(doid_onto$xref, extract_xref, prefix = "MESH"),
+  DOID = doid_onto$id,
+  OMIM  = sapply(doid_onto$xref, extract_xref, prefix = "MIM"),
+  stringsAsFactors = FALSE
+)
+rownames(MESH_obo) <- NULL
+
+# Removes rows in which MESH=NA, or both DOID and OMIM are NA
+MESH_obo <- subset(MESH_obo, 
+                        !is.na(MESH) & (!is.na(DOID) | !is.na(OMIM)))
+```
+
+We analyze the duplicates, to understand how to manage data.
+
+```{r mesh-doid-omim-6}
+duplicates_summary <- sapply(MESH_obo, function(x) {
+  clean_x <- x[!is.na(x)]
+  
+  total_ids <- length(clean_x)
+  unique_ids <- length(unique(clean_x))
+  
+  return(c(
+    Total_IDs = total_ids, 
+    Unique_IDs = unique_ids, 
+    Dups = total_ids - unique_ids
+  ))
+})
+print(duplicates_summary)
+```
+
+Also here we need to handle only the OMIM duplicates.
+
+```{r mesh-doid-omim-7}
+omim_dup <- MESH_obo %>%
+  group_by(OMIM) %>%
+  filter(n() > 1 & !is.na(OMIM))
+
+print(omim_dup)
+```
+
+The unique OMIM that map to different MESH is only 137400: it maps to
+"fissured tongue" (MESH:D014063) and "geographic tongue" (MESH:D005929).
+
+I will rely on the choice of Monarch Initiative
+(<https://monarchinitiative.org/MONDO:0007655>) that choose to associate
+OMIM:137400 to MESH:D014063.
+
+```{r mesh-doid-omim-8}
+MESH_obo[MESH_obo$DOID == "DOID:1455" & MESH_obo$MESH == "D005929", "OMIM"] <- NA
+```
+
+We clean `MESH_obo` removing the prefixes and explode lines with multiple values.
+
+```{r mesh-doid-omim-9}
+# Clean the data.frame removing prefixes
+MESH_obo <- MESH_obo %>%
+  mutate(
+    DOID = str_remove_all(DOID, "DOID[:_]"),
+    OMIM = str_remove_all(OMIM, "(OMIM|MIM)[:_]"),
+    MESH = str_remove_all(MESH, "MESH:")
+  )
+
+# Explodes OMIM and DOID lines with more values
+# Separate by "|" or ","
+MESH_obo <- MESH_obo %>%
+  separate_rows(DOID, sep = "\\|") %>%
+  separate_rows(DOID, sep = ",") %>%
+  separate_rows(OMIM, sep = "\\|") %>%
+  separate_rows(OMIM, sep = ",") %>%
+  mutate(across(everything(), str_trim)) %>%
+  distinct()
+```
+
+Now we can merge the 2 `data.frame` in a single one.
+
+```{r mesh-doid-omim-10}
+from_DOID_OMIM_to_MESH <- rbind(MESH_cross_ref, MESH_obo)
+from_DOID_OMIM_to_MESH <- unique(from_DOID_OMIM_to_MESH)
+```
+
+Sometimes, in the same cell we find 2 different MESH, in the format Cxx\|Dyy (or
+Cxx,Dyy), as mentioned before, we will keep only the Cxx types. And others
+times, more than one Cxx type. Since there are a lot of cases (\>100), and our
+team doesn't have enough biological knowledge, we will simply keep the first one
+of the list.
+
+```{r mesh-doid-omim-11}
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  mutate(
+    # Attempt to extract the first code starting with C
+    C_code = str_extract(MESH, "(?<=^|[|,])C[^|,]*"),
+    # If no C code was found, take everything before the first delimiter
+    MESH = coalesce(C_code, str_extract(MESH, "^[^|,]*"))
+  ) %>%
+  select(-C_code) %>%
+  distinct()
+from_DOID_OMIM_to_MESH <- unique(from_DOID_OMIM_to_MESH)
+```
+
+Now we handle some specific cases.
+
+Let's consider this DOID case, but it's the same with OMIM.
+
+If I have these rows:
+
+-   MESH, OMIM, DOID
+-   1, 1, 1
+-   1, 1, NA
+-   1, 1, 2
+
+We will collapse the row with the NA value in one of the other two, still
+keeping saved the other full row.
+
+```{r mesh-doid-omim-12}
+# OMIM
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  group_by(MESH, DOID) %>%
+  fill(OMIM, .direction = "downup") %>%
+  ungroup() %>%
+  distinct()
+
+# DOID
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  group_by(MESH, OMIM) %>%
+  fill(DOID, .direction = "downup") %>%
+  ungroup() %>%
+  distinct()
+```
+
+Now we handle the case in which a pair (DOID,OMIM) map to two different
+MESH: we will keep only the first of type Cxx (if exists).
+
+```{r mesh-doid-omim-13}
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  group_by(DOID, OMIM) %>%
+  mutate(has_C = any(startsWith(MESH, "C"), na.rm = TRUE)) %>%
+  filter(!(has_C & startsWith(MESH, "D"))) %>%
+  slice(1) %>% 
+  ungroup() %>%
+  select(-has_C)
+```
+
+Now we need to handle an other type of duplicates: (MESH,DOID) map to
+different OMIM and (MESH,OMIM) map to different DOID. This duplicates aren't a
+problem, simply are many-to-one cases.
+
+Other case to handle:
+
+-   MESH,OMIM,DOID
+-   1, x, A
+-   2, z, A
+
+'A' needs to be mapped to a single MESH: the first Cxx type found. The other 'A'
+will be set to NA.
+
+```{r mesh-doid-omim-14}
+# OMIM
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  group_by(OMIM) %>%
+  arrange(desc(startsWith(MESH, "C")), .by_group = TRUE) %>%
+  # Edit the OMIM
+  mutate(
+    OMIM = ifelse(row_number() == 1, OMIM, NA)
+  ) %>%
+  ungroup()
+
+# DOID
+from_DOID_OMIM_to_MESH <- from_DOID_OMIM_to_MESH %>%
+  group_by(DOID) %>%
+  arrange(desc(startsWith(MESH, "C")), .by_group = TRUE) %>%
+  # Edit the DOID
+  mutate(
+    DOID = ifelse(row_number() == 1, DOID, NA)
+  ) %>%
+  ungroup()
+```
+
+```{r mesh-doid-omim-15}
+duplicates_summary <- sapply(from_DOID_OMIM_to_MESH, function(x) {
+  clean_x <- x[!is.na(x)]
+  total_ids <- length(clean_x)
+  unique_ids <- length(unique(clean_x))
+  return(c(
+    Total_IDs = total_ids, 
+    Unique_IDs = unique_ids, 
+    Dups = total_ids - unique_ids
+  ))
+})
+print(duplicates_summary)
+```
+
+As seen before, MESH duplicates are not a problem, so our
+`from_DOID_OMIM_to_MESH` is clean and ready to be used.
+
+### Gene - identifier: NCBI
+
+We will ignore the few entries from drugbank. We will convert the ones from Uniprot using a R library (<https://bioconductor.org/packages/release/bioc/html/UniProt.ws.html>) that uses Web Services of the official site of Uniprot (<https://www.uniprot.org/>). Here an example:
+
+```{r uniprot-ex}
+if (!require("UniProt.ws")) install.packages("UniProt.ws")
+library(UniProt.ws)
+mapUniProt(
+   from='UniProtKB_AC-ID', 
+   to='GeneID', 
+   query=c('P05108','P00325')
+)
+```
+
+Now we create the data.frame `from_uniprot_to_NCBI` for mapping from Uniprot to NCBI, using all the Uniprot code present in our datasets: 2 columns from 2 SNAP datasets.
+
+```{r lookup-uniprot}
+unique_uniprot <- unique(c(SNAPDG_M$Gene.Uniprot, SNAPChG_M$Gene.Uniprot))
+length(unique_uniprot)
+
+from_uniprot_to_NCBI <- mapUniProt(
+   from='UniProtKB_AC-ID', 
+   to='GeneID', 
+   query=unique_uniprot
+)
+```
+
+### Drug - identifier: Pubchem\_Compound
+
+We will ignore the few entries from molport, zinc, CHEMBL, CHEBI. We will convert the ones from drugbank and MESH using a R library (<https://cran.r-project.org/web/packages/webchem/index.html>) that the API Service of the official site of Pubchem (<https://pubchem.ncbi.nlm.nih.gov/>). Here an example:
+
+```{r webchem-ex}
+if (!require("webchem")) install.packages("webchem")
+library(webchem)
+get_cid(
+  "DB02721", 
+  from="name"
+)
+```
+
+Using the parameter `name` permit us to search querying both drugbak names or MESH (ChemicalName) names. 
+
+Now we create a lookup table for mapping from Drugbank to CID (Pubchem\_Compound); using all the drugbank code present in our datasets: 2 columns from 2 SNAP datasets and an entire SNAP dataset.
+
+```{r lookup-drugbank}
+unique_drugbank <- unique(c(SNAPChG_M$Drug.Drugbank, SNAPDCh$Drug.Drugbank, unlist(SNAPChCh)))
+from_drugbank_to_CID <- get_cid(unique_drugbank, from = "name")
+```
+
+Now we create a lookup table for mapping from ChemicalName to CID (Pubchem\_Compound); using all the ChemicalName code present in our datasets: 2 columns from 2 CTD datasets.
+
+```{r lookup-chemName}
+unique_chemName <- unique(c(CTD_CG$ChemicalName, CTD_CD$ChemicalName))
+from_ChemName_to_CID <- get_cid(unique_chemName, from = "name")
+```
+
+# Create the dataset
+
+In this section we will create the unique file that will be used in our work. The
+final file will be a single .csv with 2 columns, and each row will be an
+edge between 2 nodes. The nodes will be only of these types: Gene::NCBI, Drug::Pubchem_Compounds, Disease::MESH.
+
+Iterating one dataset at time we will extract the nodes already in one of the three
+final types, and then map the others of a different type to one of the final
+types.
+
+## Vitagraph
+
+```{r vitagraph-already-final}
+valid_nodes_label_vitagraph <- c("Gene::NCBI","Compound::PubChem_Compounds",
+                           "Disease::MESH")
+
+# Create a search pattern from the valid_nodes_label_vitagraph vector
+pattern <- paste(valid_nodes_label_vitagraph, collapse = "|")
+
+# Filter the data frame: 
+# check if the pattern exists in both the 'head' AND the 'tail' columns
+vitagraph_already_final <- vitaGRAPH[
+  grepl(pattern, vitaGRAPH$head) & grepl(pattern, vitaGRAPH$tail), 
+  c("head", "tail")
+]
+```
+
+Now we need to consider two other types of nodes that needs to be map:
+Disease::DOID and Disease::OMIM.
+
+We will use the `from_DOID_OMIM_to_MESH` data.frame defined in the first section.
+
+```{r vitagraph-to-mesh}
+# Create clean, direct mapping vectors
+doid_lookup <- with(from_DOID_OMIM_to_MESH, 
+                    setNames(paste0("Disease::MESH:", MESH), 
+                             paste0("Disease::DOID:", DOID)))
+omim_lookup <- with(from_DOID_OMIM_to_MESH, 
+                    setNames(paste0("Disease::MESH:", MESH), 
+                             paste0("Disease::OMIM:", OMIM)))
+
+# Combine them into one master lookup
+master_lookup <- c(doid_lookup, omim_lookup)
+master_lookup <- master_lookup[!is.na(names(master_lookup))]
+
+# Extract and mutate ONLY the affected rows
+# We use %in% to find rows where head OR tail matches a DOID/OMIM entry
+vitagraph_doid_omim_to_mesh <- vitaGRAPH[
+  vitaGRAPH$head %in% names(master_lookup) | 
+    vitaGRAPH$tail %in% names(master_lookup), 
+]
+
+# Perform the substitution
+vitagraph_doid_omim_to_mesh$head <- ifelse(
+  vitagraph_doid_omim_to_mesh$head %in% names(master_lookup),
+  master_lookup[vitagraph_doid_omim_to_mesh$head],
+  vitagraph_doid_omim_to_mesh$head
+)
+vitagraph_doid_omim_to_mesh$tail <- ifelse(
+  vitagraph_doid_omim_to_mesh$tail %in% names(master_lookup),
+  master_lookup[vitagraph_doid_omim_to_mesh$tail],
+  vitagraph_doid_omim_to_mesh$tail
+)
+
+# Remove duplicates
+vitagraph_doid_omim_to_mesh <- unique(vitagraph_doid_omim_to_mesh)
+
+vitagraph_doid_omim_to_mesh <- vitagraph_doid_omim_to_mesh[,c("head", "tail")]
+row.names(vitagraph_doid_omim_to_mesh) <- NULL
+```
+
+Now we can merge the 2 `data.frame`: `vitagraph_already_final` and
+`vitagraph_doid_omim_to_mesh`.
+
+```{r vitagraph-clean}
+vitagraph_clean <- rbind(vitagraph_already_final,vitagraph_doid_omim_to_mesh)
+vitagraph_clean <- unique(vitagraph_clean)
+nrow(vitagraph_clean)
+length(unique(unlist(vitagraph_clean)))
+```
+
+## CTD
+
+We will handles the files in 3 different steps, grouping them by (head,tail).
+
+Type ChemicalName - GeneID
+
+```{r ctd-chemname-gene}
+CTD_CG_transformed <- CTD_CG %>%
+  left_join(from_ChemName_to_CID, by = c("ChemicalName" = "query")) %>%
+  filter(!is.na(cid)) %>%
+  mutate(
+    head = paste0("Drug::PubChem_Compound:", cid),
+    tail = paste0("Gene::NCBI:", GeneID)
+  ) %>%
+  dplyr::select(head, tail)
+```
+
+Type ChemicalName - DiseaseID
+
+```{r ctd-chemname-disease}
+map_omim_to_mesh <- from_DOID_OMIM_to_MESH %>%
+  filter(!is.na(OMIM) & !is.na(MESH)) %>%
+  distinct(OMIM, MESH)
+
+CTD_CD_transformed <- CTD_CD %>%
+  left_join(from_ChemName_to_CID, by = c("ChemicalName" = "query")) %>%
+  filter(!is.na(cid)) %>%
+  separate(DiseaseID, into = c("prefix", "id_val"), sep = ":", remove = FALSE) %>%
+  left_join(map_omim_to_mesh, by = c("id_val" = "OMIM")) %>%
+  mutate(
+    head = paste0("Drug::PubChem_Compound:", cid),
+    tail = case_when(
+      prefix == "MESH" ~ paste0("Disease::MESH:", id_val),
+      prefix == "OMIM" & !is.na(MESH) ~ paste0("Disease::MESH:", MESH),
+      TRUE ~ NA_character_ 
+    )
+  ) %>%
+  filter(!is.na(tail)) %>%
+  dplyr::select(head, tail)
+```
+
+Type GeneID - DiseaseID
+
+```{r ctd-gene-disease}
+CTD_GD_transformed <- CTD_GD %>%
+  separate(DiseaseID, into = c("prefix", "id_val"), sep = ":", remove = FALSE) %>%
+  left_join(map_omim_to_mesh, by = c("id_val" = "OMIM")) %>%
+  mutate(
+    head = paste0("Gene::NCBI:", GeneID),
+    tail = case_when(
+      prefix == "MESH" ~ paste0("Disease::MESH:", id_val),
+      prefix == "OMIM" & !is.na(MESH) ~ paste0("Disease::MESH:", MESH),
+      TRUE ~ NA_character_ 
+    )
+  ) %>%
+  filter(!is.na(tail)) %>%
+  dplyr::select(head, tail) %>%
+  distinct()
+```
+
+Then we merge all the 'transformed' data in a unique data.frame.
+
+```{r ctd-clean}
+ctd_clean <- bind_rows(
+  CTD_CG_transformed, 
+  CTD_CD_transformed, 
+  CTD_GD_transformed
+) %>%
+  distinct()
+nrow(ctd_clean)
+length(unique(unlist(ctd_clean)))
+```
+
+## SNAP
+
+As before for CTD, we will handles the files based on the columns types.
+
+Type Drug.Drugbank - Drug.Drugbank
+
+```{r SNAP-DB-DB}
+SNAPChCh_transformed <- SNAPChCh %>%
+  rename(db_head = 1, db_tail = 2) %>%
+  left_join(from_drugbank_to_CID, by = c("db_head" = "query")) %>%
+  rename(cid_head = cid) %>%
+  left_join(from_drugbank_to_CID, by = c("db_tail" = "query")) %>%
+  rename(cid_tail = cid) %>%
+  filter(!is.na(cid_head) & !is.na(cid_tail)) %>%
+  mutate(
+    head = paste0("Drug::PubChem_Compound:", cid_head),
+    tail = paste0("Drug::PubChem_Compound:", cid_tail)
+  ) %>%
+  dplyr::select(head, tail)
+```
+
+Type Drug.Pubchem - Gene.NCBI
+
+```{r SNAP-CID-NCBI}
+SNAPChG_DG_transformed <- SNAPChG_DG %>%
+  mutate(
+    head = paste0("Drug::PubChem_Compound:", Drug.Pubchem),
+    tail = paste0("Gene::NCBI:", Gene.NCBI)
+  ) %>%
+  dplyr::select(head, tail)
+```
+
+Type Drug.Drugbank - Gene.Uniprot
+
+```{r SNAP-DB-UNIP}
+SNAPChG_M_transformed <- SNAPChG_M %>%
+  left_join(from_drugbank_to_CID, by = c("Drug.Drugbank" = "query")) %>%
+  left_join(from_uniprot_to_NCBI, by = c("Gene.Uniprot" = "From"), 
+            relationship = "many-to-many") %>%
+  filter(!is.na(cid) & !is.na(To)) %>%
+  mutate(
+    head = paste0("Drug::PubChem_Compound:", cid),
+    tail = paste0("Gene::NCBI:", To)
+  ) %>%
+  dplyr::select(head, tail) %>%
+  distinct()
+```
+
+Type Disease.MESH - Drug.Drugbank 
+
+```{r SNAP-M-DB}
+DNAPDCh_transformed <- SNAPDCh %>%
+  left_join(from_drugbank_to_CID, by = c("Drug.Drugbank" = "query"), 
+            relationship = "many-to-many") %>%
+  filter(!is.na(cid)) %>%
+  mutate(
+    head = paste0("Disease::MESH:", Disease.MESH),
+    tail = paste0("Drug::PubChem_Compound:", cid)
+  ) %>%
+  dplyr::select(head, tail) %>%
+  distinct()
+```
+
+Type Disease.DOID - Disease.DOID
+
+```{r SNAP-D-D}
+map_doid_to_mesh <- from_DOID_OMIM_to_MESH %>% 
+  filter(!is.na(DOID)) %>% 
+  distinct(DOID, MESH)
+
+SNAPDD_transformed <- SNAPDD %>%
+  rename(doid_head = 1, doid_tail = 2) %>%
+  
+  left_join(map_doid_to_mesh, by = c("doid_head" = "DOID"), 
+            relationship = "many-to-many") %>%
+  rename(mesh_head = MESH) %>%
+  
+  left_join(map_doid_to_mesh, by = c("doid_tail" = "DOID"), 
+            relationship = "many-to-many") %>%
+  rename(mesh_tail = MESH) %>%
+  
+  filter(!is.na(mesh_head) & !is.na(mesh_tail)) %>%
+  mutate(
+    head = paste0("Disease::MESH:", mesh_head),
+    tail = paste0("Disease::MESH:", mesh_tail)
+  ) %>%
+  dplyr::select(head, tail) %>%
+  distinct()
+```
+
+Type Disease.MESH - Gene.Uniprot
+
+```{r SNAP-M-UNIP}
+SNAPDG_M_transformed <- SNAPDG_M %>%
+  left_join(from_uniprot_to_NCBI, by = c("Gene.Uniprot." = "From"), 
+            relationship = "many-to-many") %>%
+  filter(!is.na(To)) %>%
+  mutate(
+    head = paste0("Disease::MESH:", Disease.MESH.),
+    tail = paste0("Gene::NCBI:", To)
+  ) %>%
+  dplyr::select(head, tail) %>%
+  distinct()
+```
+
+Then we merge all the 'transformed' data in a unique data.frame.
+
+```{r SNAP-clean}
+snap_clean <- bind_rows(
+  SNAPChCh_transformed, SNAPChG_DG_transformed, 
+  SNAPChG_M_transformed, DNAPDCh_transformed, 
+  SNAPDD_transformed, SNAPDG_M_transformed
+) %>% distinct()
+nrow(snap_clean)
+length(unique(unlist(snap_clean)))
+```
+
+## The final dataset
+
+Before merge all together, let's see some numbers.
+
+```{r 3-clean-stats}
+datasets <- list(
+  "Vitagraph" = vitagraph_clean,
+  "CTD" = ctd_clean,
+  "SNAP" = snap_clean
+)
+get_stats <- function(df) {
+  n_rows <- nrow(df)
+  unique_values <- length(unique(c(df$head, df$tail)))
+  return(c(Rows = n_rows, Unique_Nodes = unique_values))
+}
+summary_stats <- sapply(datasets, get_stats)
+print(t(summary_stats))
+```
+
+Merge the 3 'clean' `data.frame`.
+
+```{r merge-final}
+drug_gene_disease_network <- bind_rows(
+  vitagraph_clean,
+  ctd_clean,
+  snap_clean
+) %>% distinct()
+```
+
+Our final dataset:
+
+```{r final-stats}
+print(t(get_stats(drug_gene_disease_network)))
+```
+
+Save the dataset in a .csv file.
+
+```{r save-final}
+write.csv(drug_gene_disease_network, "drug_gene_disease_network.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
