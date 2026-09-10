@@ -1,2 +1,3 @@
-# LearningFromNetwork-project
-Test of different types of embedding methods for nodes in a graph and successive ML link predictions tasks done upon them
+# Link prediction performance with different node embedding methods in a heterogeneous disease-gene-drug network
+
+A complete report can be found at: [report](./report.pdf)
